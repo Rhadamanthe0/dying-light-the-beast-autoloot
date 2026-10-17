@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+try {
 $taskRoot = $PSScriptRoot
 $taskPython = Join-Path $taskRoot '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $taskPython -PathType Leaf)) { throw 'Executer Installer-AutoLoot.cmd une premiere fois.' }
@@ -33,3 +34,7 @@ while ([DateTime]::UtcNow -lt $taskDeadline) {
     Start-Sleep -Milliseconds 100
 }
 throw ('Le demarrage reste en attente. Consulter ' + $taskStatusPath + '. Aucun processus force a s arreter.')
+} catch {
+    Write-Host ('AutoLoot : ' + $_.Exception.Message)
+    exit 1
+}

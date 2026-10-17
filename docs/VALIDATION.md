@@ -31,6 +31,8 @@ La commande `--dummy` exécute également **10 tests du cycle de vie Python** : 
 
 Le wrapper JavaScript de production est relu séparément : les 28 scénarios natifs ne prétendent pas exécuter son branchement dans le jeu.
 
+L'installation a été exécutée depuis une archive Git propre, sans les anciens dossiers `.deps`, preuves ou sauvegardes. Création d'un environnement Python neuf, installation des dépendances, 28 scénarios natifs, 10 tests hôte et 17 tests unitaires : réussite. Le refus de démarrage lorsque le jeu est fermé a également été vérifié avec le lanceur réel.
+
 ## Limites de validation
 
 - La nouvelle boucle résidente à 250 ms devra être confirmée en partie : le jeu était fermé pendant sa stabilisation.
