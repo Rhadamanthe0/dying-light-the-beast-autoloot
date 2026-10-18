@@ -79,6 +79,14 @@ class RuntimeHostTests(unittest.TestCase):
         self.control.SingleInstance.assert_not_called()
         return code, status, report
 
+    def test_launch_token_is_preserved_independently_of_host_pid(self):
+        self.args.launch_token = 'launcher-generation-1234'
+        with patch.object(self.runtime.os, 'getpid', return_value=9876):
+            code, status, _ = self.run_host()
+        self.assertEqual(code, 0)
+        self.assertEqual(status['host_pid'], 9876)
+        self.assertEqual(status['launch_token'], self.args.launch_token)
+
     def test_game_closed_at_startup_exits_without_attach(self):
         code, status, report = self.run_host()
         self.assertEqual(code, 0)

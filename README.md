@@ -7,7 +7,7 @@ Le mode résident prévoit un passage toutes les **250 ms** sur les mises à jou
 ## État
 
 - Le ramassage réel a déjà été confirmé en partie : **5 unités d'argent de l'ancien monde** reçues ; une fouille automatique a aussi réussi à **4,54 m**.
-- Le mode résident à 250 ms est qualifié séparément hors jeu. Voir [les vérifications et leurs limites](docs/VALIDATION.md).
+- Le mode résident a été confirmé en partie : butin reçu et jeu fluide. Sur un relevé de 15 secondes, les passages étaient espacés de 253,80 à 265,63 ms. Voir [les vérifications et leurs limites](docs/VALIDATION.md).
 - La coopération conserve le dispatcher du joueur local ; **le résultat à deux joueurs reste à vérifier**.
 - Cette version traite les cadavres. Les objets posés au sol ne sont pas encore pris en charge.
 

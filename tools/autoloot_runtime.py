@@ -208,7 +208,7 @@ def _live(args):
         with lock:value=json.loads(json.dumps(report))
         return write_json(args.output,value)
     def status(phase,running,ready,message_text=''):
-        value={'host_pid':os.getpid(),'running':running,'phase':phase,'ready':ready,'interval_ms':250,'radius_metres':5,
+        value={'host_pid':os.getpid(),'launch_token':getattr(args,'launch_token',None),'running':running,'phase':phase,'ready':ready,'interval_ms':250,'radius_metres':5,
           'updated_at_utc':datetime.now(timezone.utc).isoformat(),'message':message_text,'pid':config['pid'] if config else None,
           'result':report.get('result')}
         return write_json(status_path,value)
@@ -346,6 +346,7 @@ def main():
     parser.add_argument('--session',type=Path)
     parser.add_argument('--duration',type=float,default=0)
     parser.add_argument('--pid',type=int)
+    parser.add_argument('--launch-token',default=None)
     parser.add_argument('--status',type=Path,default=ROOT/'evidence/autoloot5m/status.json')
     parser.add_argument('--stop-file',type=Path,default=ROOT/'evidence/autoloot5m/stop.request')
     parser.add_argument('--output',type=Path,default=ROOT/'evidence/autoloot5m/runtime-report.json')

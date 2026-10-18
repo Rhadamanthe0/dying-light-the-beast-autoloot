@@ -9,7 +9,15 @@
 - Fouille automatique d'un nouveau cadavre à 4,536854 mètres ; appel mesuré à 0,4353 ms.
 - Restauration des hooks, déchargement normal de QuickJS et détachement vérifiés à chaque essai terminé.
 
-Ces résultats concernent la version Steam 1.7.1.0na, build 25361591. Ils ne mesurent pas la cadence de la nouvelle boucle résidente.
+Ces résultats concernent la version Steam 1.7.1.0na, build 25361591.
+
+## Boucle résidente vérifiée en partie le 18 octobre 2026
+
+- Essai de 15 secondes : 59 passages, 59 recherches spatiales et 59 destructions du vecteur natif.
+- Cadence QPC réelle : minimum 253,803 ms, maximum 265,6259 ms, moyenne 254,5445 ms.
+- Une fouille native a fait passer le contenu d'un cadavre de 2 éléments à zéro ; appel mesuré à 0,7103 ms.
+- Le retrait du hook, le déchargement normal du script et le détachement ont réussi sans erreur.
+- Après activation continue, neuf fouilles terminées ont été enregistrées. Le joueur a confirmé le butin reçu et un jeu fluide.
 
 ## Nouvelle boucle résidente
 
@@ -27,7 +35,7 @@ Qualification native : **28 scénarios réussis**, générés par `tools/autoloo
 
 Tous ces scénarios vérifient la restauration du point d'entrée, la fin des workers, les registres conservés et l'équilibre allocation/destruction du vecteur. Le test de saturation des journaux utilise une horloge accélérée ; **il n'entre pas dans les chiffres de cadence réelle ci-dessus**.
 
-La commande `--dummy` exécute également **10 tests du cycle de vie Python** : verrou d'instance, arrêt pendant le démarrage, drainage avant détachement, écriture d'état temporairement bloquée, fermeture du processus et arrêt natif signalé comme erreur. **17 tests unitaires supplémentaires** contrôlent notamment les chemins Steam, les dépendances publiées et les commandes d'installation.
+La commande `--dummy` exécute également **10 tests du cycle de vie Python** : verrou d'instance, arrêt pendant le démarrage, drainage avant détachement, écriture d'état temporairement bloquée, fermeture du processus et arrêt natif signalé comme erreur. **18 tests unitaires supplémentaires** contrôlent notamment les chemins Steam, les dépendances publiées, les commandes d'installation et l'identifiant de lancement indépendant du PID du redirecteur Python Windows.
 
 Le wrapper JavaScript de production est relu séparément : les 28 scénarios natifs ne prétendent pas exécuter son branchement dans le jeu.
 
@@ -35,7 +43,6 @@ L'installation a été exécutée depuis une archive Git propre, sans les ancien
 
 ## Limites de validation
 
-- La nouvelle boucle résidente à 250 ms devra être confirmée en partie : le jeu était fermé pendant sa stabilisation.
 - La coopération à deux joueurs, les inventaires pleins et les transitions prolongées de session restent à exercer dans le jeu.
 - Le budget de travail est contrôlé entre appels natifs ; il n'interrompt pas un appel interne du jeu lent.
 - Le déclenchement dépend des ticks actifs du joueur ; il ne fournit pas une horloge indépendante du moteur.

@@ -7,13 +7,14 @@ $taskEvidence = Join-Path $taskRoot 'evidence\autoloot5m'
 New-Item -ItemType Directory -Path $taskEvidence -Force | Out-Null
 $taskScript = Join-Path $taskRoot 'tools\autoloot_runtime.py'
 $taskStamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
-$taskChild = Start-Process -FilePath $taskPython -ArgumentList @('-u', ('"' + $taskScript + '"'), '--live') -WorkingDirectory $taskRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $taskEvidence ($taskStamp + '-stdout.log')) -RedirectStandardError (Join-Path $taskEvidence ($taskStamp + '-stderr.log'))
+$taskLaunchToken = [guid]::NewGuid().ToString('N')
+$taskChild = Start-Process -FilePath $taskPython -ArgumentList @('-u', ('"' + $taskScript + '"'), '--live', '--launch-token', $taskLaunchToken) -WorkingDirectory $taskRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $taskEvidence ($taskStamp + '-stdout.log')) -RedirectStandardError (Join-Path $taskEvidence ($taskStamp + '-stderr.log'))
 $taskStatusPath = Join-Path $taskEvidence 'status.json'
 $taskDeadline = [DateTime]::UtcNow.AddSeconds(30)
 while ([DateTime]::UtcNow -lt $taskDeadline) {
     $taskState = $null
     try { if (Test-Path -LiteralPath $taskStatusPath) { $taskState = Get-Content -LiteralPath $taskStatusPath -Raw | ConvertFrom-Json } } catch { }
-    if ($taskState -and $taskState.host_pid -eq $taskChild.Id) {
+    if ($taskState -and $taskState.launch_token -eq $taskLaunchToken) {
         if ($taskState.running -and $taskState.phase -in @('active', 'running')) {
             Write-Host 'AutoLoot actif : rayon 5 m, passage toutes les 250 ms.'
             Write-Host 'Pour arreter : Arreter-AutoLoot.cmd.'
@@ -25,7 +26,7 @@ while ([DateTime]::UtcNow -lt $taskDeadline) {
     }
     $taskChild.Refresh()
     if ($taskChild.HasExited) {
-        if ($taskState -and $taskState.running -and $taskState.host_pid -ne $taskChild.Id) {
+        if ($taskChild.ExitCode -eq 2 -and $taskState -and $taskState.running -and $taskState.launch_token -ne $taskLaunchToken) {
             $taskExisting = Get-Process -Id $taskState.host_pid -ErrorAction SilentlyContinue
             if ($taskExisting -and $taskExisting.ProcessName -like 'python*') { Write-Host 'Une instance AutoLoot est deja active.'; exit 0 }
         }
