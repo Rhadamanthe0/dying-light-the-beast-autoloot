@@ -18,7 +18,7 @@ import uuid
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '1.1.0'
+VERSION = '1.1.1'
 PYTHON_VERSION = '3.14.7'
 PYTHON_EMBED_URL = 'https://www.python.org/ftp/python/3.14.7/python-3.14.7-embed-amd64.zip'
 PYTHON_EMBED_SHA256 = 'd297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15'
@@ -48,7 +48,7 @@ def download(url, target, expected=None):
             verify(target, expected)
         return target
     temporary = target.with_name(target.name + '.' + uuid.uuid4().hex + '.part')
-    request = urllib.request.Request(url, headers={'User-Agent': 'BetterAutoLoot-InstallerBuilder/1.1.0'})
+    request = urllib.request.Request(url, headers={'User-Agent': 'BetterAutoLoot-InstallerBuilder/' + VERSION})
     with urllib.request.urlopen(request, timeout=60) as response, temporary.open('xb') as output:
         size = 0
         while chunk := response.read(1024 * 1024):

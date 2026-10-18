@@ -18,10 +18,11 @@ import time
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
-from inspect_native import Image, GAME
+from inspect_native import Image
+from game_paths import locate_game
 import observe_runtime as observer
 
-BIN = GAME / "ph_ft/work/bin/x64"
+BIN = locate_game() / "ph_ft/work/bin/x64"
 EXE = "DyingLightGame_TheBeast_x64_rwdi.exe"
 GAME_DLL = "gamedll_ph_x64_rwdi.dll"
 ENGINE_DLL = "engine_x64_rwdi.dll"
@@ -79,8 +80,13 @@ def pointer_values(prefix):
 
 
 def prepare_static():
-    image = Image(BIN / GAME_DLL)
-    if hashlib.sha256(image.data).hexdigest() != HASHES["game"] or digest(BIN / ENGINE_DLL) != HASHES["engine"]:
+    global BIN
+    # The watcher keeps this module loaded while users can change game_path.
+    # Snapshot one fresh directory for this proof; keep BIN current for callers.
+    bin_path = locate_game() / "ph_ft/work/bin/x64"
+    BIN = bin_path
+    image = Image(bin_path / GAME_DLL)
+    if hashlib.sha256(image.data).hexdigest() != HASHES["game"] or digest(bin_path / ENGINE_DLL) != HASHES["engine"]:
         raise ValueError("Installed DLL hash differs from reviewed 1.7.1 build")
     if image.pe.FILE_HEADER.Machine != 0x8664 or image.pe.OPTIONAL_HEADER.Magic != 0x20B:
         raise ValueError("Reviewed x64 PE required")
@@ -135,7 +141,7 @@ def prepare_static():
     if parent[0]!=0x12CC7A0:
         raise ValueError('Controller caller unwind parent changed')
     return {"schema_version": 1, "mode": "static_PE_only_no_process_access",
-            "images": {key:{"path":str(BIN/name),"sha256":HASHES[key]} for key,name in [("game",GAME_DLL),("engine",ENGINE_DLL)]},
+            "images": {key:{"path":str(bin_path/name),"sha256":HASHES[key]} for key,name in [("game",GAME_DLL),("engine",ENGINE_DLL)]},
             "game_global_rva": hex(global_rva), "guarded_prologues": guards,
             "discovery_prologues": discovery_guards, "vtables": tables,
             "disassembly": {hex(rva):image.disasm(rva,size) for rva,size in [(0xDD0EF0,31),(0xB347B0,8),(0x17F800,5),
@@ -263,6 +269,7 @@ class Reader:
 
 def discover(pid=None):
     proof=prepare_static()
+    bin_path=Path(proof["images"]["game"]["path"]).parent
     api=api_setup()
     pids=process_ids(api)
     if pid is None:
@@ -275,7 +282,7 @@ def discover(pid=None):
     modules={}
     for key,name in [("game",GAME_DLL),("engine",ENGINE_DLL),("exe",EXE)]:
         matches=[m for m in loaded if m['name'].casefold()==name.casefold()]
-        if len(matches)!=1 or path_key(matches[0]['path'])!=path_key(BIN/name):
+        if len(matches)!=1 or path_key(matches[0]['path'])!=path_key(bin_path/name):
             raise ValueError("Expected module/path not unique: "+name)
         module=dict(matches[0]); module['sha256']=digest(module['path'])
         if key in HASHES and module['sha256']!=HASHES[key]:

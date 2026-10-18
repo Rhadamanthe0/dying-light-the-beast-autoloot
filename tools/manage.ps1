@@ -25,9 +25,18 @@ function Get-AutoLootWatcher([string]$InstallationRoot) {
     Get-AutoLootProcess (Join-Path $InstallationRoot 'evidence\autoloot5m\watch-status.json')
 }
 
-function Pause-AutoLoot([string]$InstallationRoot) {
+function Test-AutoLootUserPaused([string]$InstallationRoot) {
+    $data = Join-Path $InstallationRoot 'evidence\autoloot5m'
+    return (Test-Path -LiteralPath (Join-Path $data 'watch.pause')) -and
+        -not (Test-Path -LiteralPath (Join-Path $data 'installation.pause'))
+}
+
+function Pause-AutoLoot([string]$InstallationRoot, [switch]$InstallationStop) {
     $data = Join-Path $InstallationRoot 'evidence\autoloot5m'
     New-Item -ItemType Directory -Path $data -Force | Out-Null
+    if (-not $InstallationStop -and (Test-Path -LiteralPath (Join-Path $data 'installation.pause'))) {
+        Remove-Item -LiteralPath (Join-Path $data 'installation.pause') -Force
+    }
     Set-Content -LiteralPath (Join-Path $data 'watch.pause') -Value 'user pause' -Encoding utf8
     $worker = Get-AutoLootProcess (Join-Path $data 'status.json')
     Set-Content -LiteralPath (Join-Path $data 'stop.request') -Value 'user stop' -Encoding utf8
@@ -40,10 +49,14 @@ function Pause-AutoLoot([string]$InstallationRoot) {
 function Stop-AutoLootInstallation([string]$InstallationRoot) {
     $data = Join-Path $InstallationRoot 'evidence\autoloot5m'
     New-Item -ItemType Directory -Path $data -Force | Out-Null
+    # Keep installer shutdown distinct from a manual pause across interrupted retries.
+    if (-not (Test-Path -LiteralPath (Join-Path $data 'watch.pause'))) {
+        Set-Content -LiteralPath (Join-Path $data 'installation.pause') -Value 'temporary installation pause' -Encoding utf8
+    }
     Set-Content -LiteralPath (Join-Path $data 'watch.pause') -Value 'installation stopped' -Encoding utf8
     $watcher = Get-AutoLootWatcher $InstallationRoot
     Set-Content -LiteralPath (Join-Path $data 'watch.stop') -Value 'installation stopped' -Encoding utf8
-    Pause-AutoLoot $InstallationRoot
+    Pause-AutoLoot $InstallationRoot -InstallationStop
     if ($watcher -and -not $watcher.WaitForExit(30000)) {
         throw 'The watcher is still shutting down. Wait before retrying.'
     }
@@ -104,6 +117,9 @@ function Resume-AutoLoot([string]$InstallationRoot, [switch]$KeepPaused) {
         if (-not $watcher.WaitForExit(30000)) { throw 'The watcher is still shutting down.' }
         $watcher = $null
     }
+    if (Test-Path -LiteralPath (Join-Path $data 'installation.pause')) {
+        Remove-Item -LiteralPath (Join-Path $data 'installation.pause') -Force
+    }
     if ($KeepPaused) {
         Set-Content -LiteralPath (Join-Path $data 'watch.pause') -Value 'user pause preserved' -Encoding utf8
     } else {
@@ -143,9 +159,9 @@ function Prepare-AutoLoot([string]$InstallationRoot, [string]$InstallerStatePath
     if (-not $InstallerStatePath) { throw 'An installer state path is required.' }
     $previous = if (-not $SkipAutoStart) { Get-AutoLootPreviousRoot } else { $null }
     # Capture the user's choice before cooperative shutdown itself creates watch.pause.
-    $keepPaused = Test-Path -LiteralPath (Join-Path $InstallationRoot 'evidence\autoloot5m\watch.pause')
+    $keepPaused = Test-AutoLootUserPaused $InstallationRoot
     if ($previous -and $previous -ne $InstallationRoot -and (Test-Path -LiteralPath $previous -PathType Container)) {
-        $keepPaused = $keepPaused -or (Test-Path -LiteralPath (Join-Path $previous 'evidence\autoloot5m\watch.pause'))
+        $keepPaused = $keepPaused -or (Test-AutoLootUserPaused $previous)
         Stop-AutoLootInstallation $previous
     }
     Stop-AutoLootInstallation $InstallationRoot
@@ -168,22 +184,20 @@ function Configure-AutoLoot([string]$InstallationRoot, [string]$InstallerStatePa
         return
     }
     Register-AutoLootStartup $InstallationRoot
-    Resume-AutoLoot $InstallationRoot -KeepPaused:([bool]$state.keep_paused)
+    # Prepare always sets this pause; an explicit Resume may have cleared it since.
+    $pausePresent = Test-Path -LiteralPath (Join-Path $InstallationRoot 'evidence\autoloot5m\watch.pause')
+    $keepPaused = $pausePresent -and ([bool]$state.keep_paused -or (Test-AutoLootUserPaused $InstallationRoot))
+    Resume-AutoLoot $InstallationRoot -KeepPaused:$keepPaused
     Write-Host 'Installation complete. AutoLoot will start automatically with your games and at Windows sign-in.'
 }
 
 function Install-AutoLoot([string]$InstallationRoot) {
+    $installerState = Join-Path $InstallationRoot 'evidence\installer-state.json'
+    Prepare-AutoLoot $InstallationRoot $installerState -SkipAutoStart:$NoAutoStart
     if (Test-Path -LiteralPath (Join-Path $InstallationRoot 'runtime') -PathType Container) {
-        $installerState = Join-Path $InstallationRoot 'evidence\installer-state.json'
-        Prepare-AutoLoot $InstallationRoot $installerState -SkipAutoStart:$NoAutoStart
         Configure-AutoLoot $InstallationRoot $installerState -SkipAutoStart:$NoAutoStart
         return
     }
-    $previous = Get-AutoLootPreviousRoot
-    if ($previous -and $previous -ne $InstallationRoot -and (Test-Path -LiteralPath $previous -PathType Container)) {
-        Stop-AutoLootInstallation $previous
-    }
-    Stop-AutoLootInstallation $InstallationRoot
     $python = Join-Path $InstallationRoot '.venv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
         $basePython = $null
@@ -203,11 +217,7 @@ function Install-AutoLoot([string]$InstallationRoot) {
     }
     & $python -m pip install --disable-pip-version-check -r (Join-Path $InstallationRoot 'requirements.txt')
     if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
-    & $python (Join-Path $InstallationRoot 'tools\autoloot_runtime.py') --dummy
-    if ($LASTEXITCODE -ne 0) { throw 'Offline checks failed. See the installation log.' }
-    Register-AutoLootStartup $InstallationRoot
-    Resume-AutoLoot $InstallationRoot
-    Write-Host 'Installation complete. AutoLoot will start automatically with your games and at Windows sign-in.'
+    Configure-AutoLoot $InstallationRoot $installerState -SkipAutoStart:$NoAutoStart
 }
 
 function Uninstall-AutoLoot([string]$InstallationRoot, [switch]$SkipAutoStart) {
