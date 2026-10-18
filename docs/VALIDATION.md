@@ -1,5 +1,16 @@
 # Vérifications
 
+## Réglage actuel : 2 mètres et 100 ms
+
+Les recherches spatiales et les deux contrôles de distance avant chaque action utilisent 2 m pour les cadavres, objets et contenants. La cadence programmée est de 100 ms depuis le début du passage précédent, sans rattrapage. Le budget reste de 8 ms entre appels natifs.
+
+- **63 scénarios natifs réussis**, dont les 54 régressions précédentes et neuf nouveaux cas : admission à 2 m, refus à 2,01 m et refus après déplacement entre la sélection et le dernier contrôle, pour les trois types de source.
+- Sur les 63 snapshots, le prochain délai Tick vaut exactement début + 100 ms ; le délai QPC vaut exactement `ceil(fréquence × 100 / 1000)` après le début. Cette vérification détecte un ordonnancement resté à 250 ms sans imposer de plafond au retard de planification de Windows.
+- Cas normal hors jeu dans l'installation neuve : 20 intervalles QPC réels, de 106,8986 à 129,7598 ms. Le cas d'appel lent de 320 ms et l'absence de rattrapage restent vérifiés.
+- **11 tests hôte et 20 tests complémentaires** réussis. Le script d'arrêt attend maintenant la sortie de l'hôte avant d'autoriser une relance ; le test avec un hôte temporaire qui met 800 ms à finir échoue avec l'ancien script et réussit avec le nouveau. Les formats de date Windows PowerShell et PowerShell 7 sont couverts.
+
+Le jeu étant fermé et le joueur indisponible pour le relancer, **aucune mesure en partie à 2 m / 100 ms n'a été faite**. Les résultats en partie ci-dessous proviennent du réglage précédent 5 m / 250 ms et sont conservés comme historique. Le rayon est une distance sans test de visibilité : il ne bloque pas les prises à travers toutes les cloisons.
+
 ## Réalisé en partie sur la première implémentation
 
 - Appel du dispatcher normal du joueur, sans touche de fouille ni visée requise.
@@ -48,7 +59,7 @@ Ce parcours concerne le `Container` déjà fouillable en état 1, mode local 1. 
 
 ## Qualification hors jeu de la boucle résidente
 
-Qualification native : **54 scénarios réussis** (28 cadavres, 12 objets et 14 contenants), générés par `tools/autoloot_runtime.py --dummy` pendant l'installation. Le cœur C réel est exécuté dans un processus de test dédié, avec les fonctions du moteur remplacées par des stubs natifs. Les chiffres de cadence du tableau proviennent de la qualification initiale des cadavres.
+Qualification actuelle : **63 scénarios réussis** (54 régressions, plus neuf cas de frontière et déplacement), générés par `tools/autoloot_runtime.py --dummy` pendant l'installation. Le cœur C réel est exécuté dans un processus de test dédié, avec les fonctions du moteur remplacées par des stubs natifs. Les chiffres de cadence du tableau proviennent de la qualification initiale des cadavres à 250 ms.
 
 | Scénario | Résultat mesuré |
 | --- | --- |
@@ -64,11 +75,19 @@ Qualification native : **54 scénarios réussis** (28 cadavres, 12 objets et 14 
 
 Tous ces scénarios vérifient la restauration du point d'entrée, la fin des workers, les registres conservés et l'équilibre allocation/destruction du vecteur. Le test de saturation des journaux utilise une horloge accélérée ; **il n'entre pas dans les chiffres de cadence réelle ci-dessus**.
 
-La commande `--dummy` exécute également **11 tests du cycle de vie Python** : verrou d'instance, arrêt pendant le démarrage, drainage avant détachement, écriture d'état temporairement bloquée, fermeture du processus, arrêt natif signalé comme erreur et plafond de dispatch atteint sans erreur. **18 tests unitaires supplémentaires** contrôlent notamment les chemins Steam, les dépendances publiées, les commandes d'installation et l'identifiant de lancement indépendant du PID du redirecteur Python Windows.
+La commande `--dummy` exécute également **11 tests du cycle de vie Python** : verrou d'instance, arrêt pendant le démarrage, drainage avant détachement, écriture d'état temporairement bloquée, fermeture du processus, arrêt natif signalé comme erreur et plafond de dispatch atteint sans erreur. Les tests supplémentaires contrôlent les chemins Steam, les dépendances publiées, les commandes d'installation, l'identifiant de lancement indépendant du PID du redirecteur Python Windows et l'attente de fin de processus par le script d'arrêt.
 
-Le wrapper JavaScript de production est relu séparément : les 54 scénarios natifs ne prétendent pas exécuter son branchement dans le jeu. Les essais en partie décrits plus haut exercent ce branchement.
+Le wrapper JavaScript de production est relu séparément : les 63 scénarios natifs ne prétendent pas exécuter son branchement dans le jeu à la nouvelle cadence. Les essais historiques en partie décrits plus haut exercent le branchement précédent.
 
-Avant l'extension aux objets, l'installation a été exécutée depuis une archive Git propre, sans les anciens dossiers `.deps`, preuves ou sauvegardes. Création d'un environnement Python neuf, installation des dépendances, 28 scénarios natifs, 10 tests hôte et 17 tests unitaires : réussite. Le refus de démarrage lorsque le jeu est fermé a également été vérifié avec le lanceur réel. Les extensions conservent les mêmes fichiers et dépendances ; les 54 scénarios natifs, 11 tests hôte et 18 tests unitaires ont été exécutés localement depuis l'installation existante.
+## Installation neuve du réglage actuel
+
+Un export des 30 fichiers publiés a été vérifié contre l'index Git, puis installé dans un dossier neuf, sans `.venv`, `.deps`, preuves ou sauvegardes préexistantes.
+
+- `Installer-AutoLoot.ps1` exécuté sous Windows PowerShell : nouvel environnement Python, installation des trois versions épinglées, **63 scénarios natifs et 11 tests hôte réussis**, code de sortie 0.
+- Les **20 tests complémentaires** passent depuis cet environnement neuf, sans test ignoré, y compris l'arrêt drainant sous Windows PowerShell et PowerShell 7.
+- Les empreintes du cœur et de sa fixture correspondent aux fichiers de cette installation. Les différences de fins de ligne entre dépôt et dossier de développement n'utilisent aucune qualification périmée.
+- Le lanceur réel, jeu fermé, refuse l'activation avec le message « AutoLoot non actif : game_closed Le jeu est fermé », code de sortie 1. Aucun jeu n'a été lancé et aucun script natif n'a été chargé dans le jeu.
+- Le guide correspond aux noms et arguments des scripts ; mise à jour dans un dossier neuf après arrêt de l'ancien hôte, réglages 2 m / 100 ms et nom de journal historique explicités.
 
 ## Limites de validation
 

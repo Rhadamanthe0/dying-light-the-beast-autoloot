@@ -27,7 +27,9 @@ gpointer resolve(gpointer pool,guint64 handle){stats[2]++;
 }
 gint select(gpointer component,gpointer ctx){guint64 h;stats[4]++;
  if((guint64)ctx!=cfg[14]||((guint64)component!=cfg[9]&&(guint64)component!=cfg[28]))stats[5]++;
- if(!load(controls+5)){h=*(guint64*)(*(guint64*)((guint8*)component+0x598)+0x28);*(guint*)(h+0x239c)=123;}block(2);return load(controls+3);
+ if(!load(controls+5)){h=*(guint64*)(*(guint64*)((guint8*)component+0x598)+0x28);*(guint*)(h+0x239c)=123;}
+ if(load(controls+4)==13){guint64 matrix=(guint64)component==cfg[9]?cfg[15]:cfg[23];*(float*)(matrix+12)=2.01f;}
+ block(2);return load(controls+3);
 }
 guint8 eligibility(gpointer component,gint action,gpointer ctx){stats[6]++;
  if(action!=1||(guint64)ctx!=cfg[14]||((guint64)component!=cfg[9]&&(guint64)component!=cfg[28]))stats[7]++;
@@ -46,7 +48,7 @@ guint8 dispatch(gpointer player,guint64 handle,gpointer ctx){guint64 component,h
 }
 guint8 query(gpointer level,gpointer vector,gpointer centre,float radius,gpointer type,guint8 flag,gpointer optional){
  guint64*v=vector,*data;guint n=2,i;float*c=centre;stats[10]++;
- if((guint64)level!=cfg[29]||(guint64)type!=cfg[30]||radius!=5.0f||flag||optional||
+ if((guint64)level!=cfg[29]||(guint64)type!=cfg[30]||radius!=2.0f||flag||optional||
     c[0]!=0||c[1]!=0||c[2]!=0||(v[0]&0xffffffffffffULL)!=(guint64)((guint8*)vector+8)||*(guint16*)((guint8*)vector+6)!=0x0101)stats[11]++;
  block(5);if(load(controls+4)==4)Sleep(320);
  if(load(controls+4)==5)n=0;if(load(controls+4)==6)n=18;
@@ -78,7 +80,7 @@ guint64 tick(gpointer player,guint64 value,guint64 depth){
  }
  return ((guint64)player^value)+0x1234;}
 guint worker(gpointer a){Worker*w=a;guint i;w->thread_id=GetCurrentThreadId();
- for(i=0;i<w->count;i++){if(load(controls+7))g_atomic_int_add(controls+6,250);
+ for(i=0;i<w->count;i++){if(load(controls+7))g_atomic_int_add(controls+6,100);
    if(((Tick)tick_address)(w->player,i,0)!=(((guint64)w->player^i)+0x1234))w->failures++;Sleep(load(controls+7)?1:16);}
  w->done=1;return 0;}
 `;
@@ -106,7 +108,7 @@ function transform(object,x){const obj=Memory.alloc(0x150),t=Memory.alloc(0x30),
  [1,0,0,x,0,1,0,0,0,0,1,0].forEach((v,i)=>matrix.add(i*4).writeFloat(v));matrices.push({object,obj,t,page,matrix,flags});}
 transform(player,0);transform(player2,0);
 for(let i=0;i<2;i++){const s={body:Memory.alloc(0x620),human:Memory.alloc(0x2870),entity:Memory.alloc(0x90),strategy:Memory.alloc(0x40),manager:Memory.alloc(8),handles:Memory.alloc(16),
- component:storage.add(i*0x4000+0x180),handle:uint64('0x52e1c4f400000018').add(i*0x400)};sources.push(s);transform(s.body,2+i);}
+ component:storage.add(i*0x4000+0x180),handle:uint64('0x52e1c4f400000018').add(i*0x400)};sources.push(s);transform(s.body,1+i*0.5);}
 for(let i=0;i<2;i++)groundMeta.push({proxy:storage.add(i*0x4000+0x780),handle:sources[i].handle.add(0x60),node:Memory.alloc(24),table:Memory.alloc(24),records:Memory.alloc(72)});
 function initialize(mode){
  state.writeByteArray(new Uint8Array(32768));bindingCfg.writeByteArray(new Uint8Array(256));cfg.writeByteArray(new Uint8Array(256));runtimeConfig.writeByteArray(new Uint8Array(128));fixtureStats.writeByteArray(new Uint8Array(128));controls.writeByteArray(new Uint8Array(32));controls.add(12).writeS32(1);
@@ -123,11 +125,11 @@ function initialize(mode){
  n(s.component.add(0x448),uint64('0xffffffffffffffff'));n(s.component.add(0x450),0);n(s.component.add(0x458),0);s.human.add(0x2830).writeByteArray(new Uint8Array(48));
  s.body.add(0x4c8).writeByteArray(new Uint8Array(16));s.body.add(0x4d0).writeU32(i===0&&mode==='zero_count'?0:2);s.body.add(0x388).writeU32(1);s.body.add(0x508).writeU32(1);q(s.body.add(0x570),NULL);
  }
- matrices.forEach(m=>m.flags.writeU8(4));matrices[2].matrix.add(12).writeFloat(2);matrices[3].matrix.add(12).writeFloat(3);
+ matrices.forEach(m=>m.flags.writeU8(4));matrices[2].matrix.add(12).writeFloat(1);matrices[3].matrix.add(12).writeFloat(1.5);
  ctx.sub(16).writeByteArray(new Uint8Array(16).fill(0xa5));ctx.writeByteArray(new Uint8Array(48));ctx.add(48).writeByteArray(new Uint8Array(16).fill(0x5a));vector.sub(16).writeByteArray(new Uint8Array(16).fill(0xa5));vector.writeByteArray(new Uint8Array(16));vector.add(16).writeByteArray(new Uint8Array(16).fill(0x5a));
- const s=sources[0],t=sources[1];[player,game,gameSlot,image,level,client,client,s.body,s.human,s.component,s.strategy,s.manager,image.add(0x37069b0),s.handle,ctx,0,pool,storage,s.entity,s.handles,s.handles,1,0,2,1,5000,t.body,t.handle,t.component,ilevel,typeObj,t.handles].forEach((v,i)=>n(cfg.add(i*8),v));
+ const s=sources[0],t=sources[1];[player,game,gameSlot,image,level,client,client,s.body,s.human,s.component,s.strategy,s.manager,image.add(0x37069b0),s.handle,ctx,0,pool,storage,s.entity,s.handles,s.handles,1,0,2,1,2000,t.body,t.handle,t.component,ilevel,typeObj,t.handles].forEach((v,i)=>n(cfg.add(i*8),v));
  [player,game,gameSlot,image,level,client,client,image,vector,ctx,frequency,0,0,1].forEach((v,i)=>n(runtimeConfig.add(i*8),v));
- if(mode==='far')matrices[2].matrix.add(12).writeFloat(5.1);if(mode==='near5')matrices[2].matrix.add(12).writeFloat(5);
+ if(mode==='far')matrices[2].matrix.add(12).writeFloat(2.01);if(mode==='near2')matrices[2].matrix.add(12).writeFloat(2);
  if(mode==='dirty')matrices[2].flags.writeU8(6);if(mode==='wrong_handle')n(s.component.add(8),s.handle.add(1));
  if(mode==='forwarding')n(s.component.add(0x450),1);if(mode==='extra')q(s.human.add(0x2858),s.body);
  if(mode==='mode')s.body.add(0x508).writeU32(0);if(mode==='nested')q(s.body.add(0x570),s.body);
@@ -185,6 +187,10 @@ function initialize(mode){
    if(mode==='container_complex_layout')sources.forEach(a=>{q(a.body,image.add(0x29ed590));a.body.add(0x4d0).writeU32(0xffffffff);});
   }
  }
+ n(cfg.add(15*8),matrices[2].matrix);n(cfg.add(23*8),matrices[3].matrix);
+ if(mode.endsWith('_near2')){matrices[2].matrix.add(12).writeFloat(2);matrices[3].matrix.add(12).writeFloat(2);}
+ if(mode.endsWith('_far2')){matrices[2].matrix.add(12).writeFloat(2.01);matrices[3].matrix.add(12).writeFloat(2.01);}
+ if(mode.endsWith('_range_changed'))controls.add(16).writeS32(13);
 }
 // Wrapper sets/checks Win64 callee-saved GPR and SIMD canaries and preserves RAX.
 const registerFailures=Memory.alloc(4),wrapper=Memory.alloc(Process.pageSize);

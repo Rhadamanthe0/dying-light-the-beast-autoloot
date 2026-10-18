@@ -16,7 +16,7 @@ while ([DateTime]::UtcNow -lt $taskDeadline) {
     try { if (Test-Path -LiteralPath $taskStatusPath) { $taskState = Get-Content -LiteralPath $taskStatusPath -Raw | ConvertFrom-Json } } catch { }
     if ($taskState -and $taskState.launch_token -eq $taskLaunchToken) {
         if ($taskState.running -and $taskState.phase -in @('active', 'running')) {
-            Write-Host 'AutoLoot actif : cadavres, objets et contenants compatibles, rayon 5 m, passage toutes les 250 ms.'
+            Write-Host 'AutoLoot actif : cadavres, objets et contenants compatibles, rayon 2 m, passage toutes les 100 ms.'
             Write-Host 'Pour arreter : Arreter-AutoLoot.cmd.'
             exit 0
         }

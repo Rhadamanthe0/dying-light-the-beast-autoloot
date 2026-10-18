@@ -1,6 +1,7 @@
 'use strict';
-// Resident native250ms runtime. No JS executes inside game callbacks.
+// Resident native100ms runtime. No JS executes inside game callbacks.
 const config=__QUERY_CONFIG__,coreSource=__QUERY_CORE__;
+const INTERVAL_MS=100,RADIUS_METRES=2;
 const hold={cfg:null,bindingCfg:null,state:null,vectorBlock:null,contextBlock:null,snapshot:null,module:null,listener:null};
 let target=null,original=null,timer=null,stopped=null,pendingStop=null,frequency=0;
 let nativeSnapshot=null,nativePending=null,nativeDisable=null;
@@ -60,7 +61,7 @@ rpc.exports={poll(){if(stopped)return stopped;if(pendingStop&&nativePending()===
 try{
   if(Frida.version!=='17.24.0'||Script.runtime!=='QJS'||Process.arch!=='x64'||Process.platform!=='windows'||
     Process.pointerSize!==8||Process.id!==config.pid||config.duration_ms<0||config.duration_ms>86400000||
-    config.interval_ms!==250||config.phase!=='player-update')throw new Error('Reviewed runtime/one-shot identity required');
+    config.interval_ms!==INTERVAL_MS||config.radius_metres!==RADIUS_METRES||config.phase!=='player-update')throw new Error('Reviewed runtime/one-shot identity required');
   const kernel=Process.getModuleByName('kernel32.dll'),address=n=>kernel.getExportByName(n);
   const times=Memory.alloc(32),getTimes=new NativeFunction(address('GetProcessTimes'),'bool',Array(5).fill('pointer'));
   if(!getTimes(ptr('0xffffffffffffffff'),times,times.add(8),times.add(16),times.add(24))||
@@ -115,6 +116,6 @@ try{
   hold.listener=Interceptor.attach(target,{onEnter:cm.on_enter,onLeave:cm.on_leave});Interceptor.flush();
   if(windowMs>0)timer=setTimeout(()=>stop('duration_limit'),windowMs);
   send({type:'armed',mode:'resident_native_autoloot',pid:Process.id,target:target.toString(),
-    interval_ms:250,radius_metres:5,page_size:8,budget_ms:8,rpm_limit:4096,
+    interval_ms:INTERVAL_MS,radius_metres:RADIUS_METRES,page_size:8,budget_ms:8,rpm_limit:4096,
     native_state_bytes:stateSize,duration_ms:config.duration_ms,runtime:Script.runtime});
 }catch(error){errors.push(String(error.stack||error));stop('preflight_or_setup_failure');}

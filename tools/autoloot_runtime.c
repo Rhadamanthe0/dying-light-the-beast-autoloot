@@ -1,4 +1,4 @@
-/* Resident quarter-second corpse collector. No JavaScript in game callbacks.
+/* Resident native collector, radius 2 metres, cadence 100 milliseconds. No JavaScript in game callbacks.
  * All native calls finish normally; stop/budget checks occur BETWEEN calls.
  * Fixed page8, RPM4096, event/cadence rings64; no unbounded owned storage. */
 #include <gum/guminterceptor.h>
@@ -17,6 +17,10 @@ extern guint8 player_dispatch(gpointer,guint64,gpointer);
 extern guint64 runtime_config[16];
 /* Writable storage is external: CModule's own data pages are read-only. */
 extern guint64 cfg[32];
+enum { COLLECTION_INTERVAL_MS=100,COLLECTION_RADIUS_MM=2000,COLLECTION_BUDGET_MS=8 };
+#define COLLECTION_RADIUS_METRES 2.0f
+#define COLLECTION_RADIUS_SQUARED (COLLECTION_RADIUS_METRES*COLLECTION_RADIUS_METRES)
+static guint64 interval_ticks(void){return (runtime_config[10]*COLLECTION_INTERVAL_MS+999)/1000;}
 enum {PLAYER,GAME,GAME_SLOT,BASE,LEVEL,CLIENT,GATE,BODY,HUMAN,COMPONENT,STRATEGY,MANAGER,
 POOL_SLOT,HANDLE,CONTEXT,DEADLINE,POOL,STORAGE,ENTITY,VECTOR_DATA,VECTOR_PACKED,VECTOR_COUNT,
 COMPONENT_INDEX,EXPECTED_COUNT,EXPECTED_STATE,RADIUS_MM,SOURCE_KIND,RECEIVER_HANDLE,PROXY,SENDER_NODE,RECEIVER_CALLBACK,RECEIVER_TABLE};
@@ -134,8 +138,7 @@ static gboolean guard_body(Witness *w) {
   state.reason=6;
   if (!position(cfg[PLAYER],w->player) || !position(cfg[BODY],w->body)) return FALSE;
   for(i=0;i<3;i++) {d=w->player[i]-w->body[i]; dist+=d*d;}
-  if (cfg[RADIUS_MM]<3000 || cfg[RADIUS_MM]>5000 ||
-      dist>((float)(guint)cfg[RADIUS_MM]/1000.0)*((float)(guint)cfg[RADIUS_MM]/1000.0)) return FALSE;
+  if (cfg[RADIUS_MM]!=COLLECTION_RADIUS_MM || dist>COLLECTION_RADIUS_SQUARED) return FALSE;
   if (!rpm(cfg[HUMAN]+0x239c,&w->cache,4)) return FALSE;
   w->count=count; w->manager=cfg[MANAGER]; w->component=cfg[COMPONENT];
   w->strategy=cfg[STRATEGY]; w->human=cfg[HUMAN]; w->body_pointer=cfg[BODY];
@@ -151,7 +154,7 @@ static gboolean canaries(void) {
 
 static gboolean stopped(void){return atomic_get(&state.disabled)!=0;}
 static gboolean budget(void){guint64 now;QueryPerformanceCounter((gint64*)&now);
-  return now-state.cycle_start_qpc>=(runtime_config[10]*8+999)/1000 || state.reads>=4096;}
+  return now-state.cycle_start_qpc>=(runtime_config[10]*COLLECTION_BUDGET_MS+999)/1000 || state.reads>=4096;}
 static gboolean checkpoint(void){return !stopped()&&!state.limit_reached&&!budget()&&atomic_get(&state.inflight)==1;}
 static gboolean local_guard(void){guint64 v;
   QEQ(cfg[GAME_SLOT],cfg[GAME]);
@@ -242,7 +245,7 @@ static gboolean guard_cbs(Witness*w){
     default:return FALSE;
   }
   if(!position(cfg[PLAYER],w->player)||!position(cfg[BODY],w->body))return FALSE;
-  for(i=0;i<3;i++){d=w->player[i]-w->body[i];dist+=d*d;}if(dist>25.0f)return FALSE;
+  for(i=0;i<3;i++){d=w->player[i]-w->body[i];dist+=d*d;}if(dist>COLLECTION_RADIUS_SQUARED)return FALSE;
   w->body_pointer=cfg[BODY];w->component=cfg[COMPONENT];w->human=cfg[PROXY];
   state.reason=0;return TRUE;
 }
@@ -305,7 +308,7 @@ static void event(guint status,gint action,guint eligible,guint al,Post after,gu
   e[0]=state.cycles;e[1]=GetTickCount64();e[2]=cfg[BODY];e[3]=cfg[HUMAN];e[4]=cfg[HANDLE];e[5]=status;e[6]=state.reason;
   e[7]=before->count;e[8]=after.count;e[9]=after.body_state;e[10]=(guint64)(gint64)action;e[11]=eligible;e[12]=al;
   extra[0]=cfg[SOURCE_KIND];extra[1]=cfg[SOURCE_KIND]==1?cfg[EXPECTED_COUNT]:0;extra[2]=after.ground_flags;extra[3]=after.invalidated;
-  e[13]=state.reads-reads_before;e[14]=end-start;e[15]=ds>=0&&ds<=25?(guint)(ds*1000000.0f):~0ULL;state.events_total++;
+  e[13]=state.reads-reads_before;e[14]=end-start;e[15]=ds>=0&&ds<=COLLECTION_RADIUS_SQUARED?(guint)(ds*1000000.0f):~0ULL;state.events_total++;
 }
 static gboolean action(void){
   Witness before={0},after={0};Post result={0};gpointer resolved;guint8*ctx=p(CONTEXT);
@@ -361,14 +364,14 @@ static void cycle(void){
   state.reason=0;state.status=2;state.thread_id=GetCurrentThreadId();state.cycles++;
   QueryPerformanceCounter((gint64*)&begin);
   for(i=7;i<32;i++)cfg[i]=0;
-  cfg[POOL_SLOT]=cfg[BASE]+0x37069b0;cfg[CONTEXT]=runtime_config[9];cfg[RADIUS_MM]=5000;
+  cfg[POOL_SLOT]=cfg[BASE]+0x37069b0;cfg[CONTEXT]=runtime_config[9];cfg[RADIUS_MM]=COLLECTION_RADIUS_MM;
   if(!checkpoint()||!local_guard()||!vector_canaries()||!canaries()||!position(cfg[PLAYER],centre))goto finish;
   if(!q(cfg[PLAYER]+0x40,&a)||!q(a+0x48,&b)||!b||!q(b+0x6d8,&level)||!level||
      !q(runtime_config[7]+0x260ebf8,&type)||!type||!q(type,&a)||!a)goto finish;
   for(i=0;i<16;i++)v[i]=0;*(guint64*)v=(runtime_config[8]+8)&0xffffffffffffULL;*(guint16*)(v+6)=0x0101;initialized=TRUE;
   if(!checkpoint())goto destroy;
   QueryPerformanceCounter((gint64*)&query_start);state.queries++;
-  state.query_al=find_radius((gpointer)level,v,centre,5.0f,(gpointer)type,0,NULL);
+  state.query_al=find_radius((gpointer)level,v,centre,COLLECTION_RADIUS_METRES,(gpointer)type,0,NULL);
   QueryPerformanceCounter((gint64*)&query_end);state.query_ticks+=query_end-query_start;
   if(!vector_canaries()){state.status=6;g_atomic_int_add(&state.disabled,1);goto destroy;}
   marker=v[7];total=marker?marker-1:u32(v+8);state.last_native_count=total;data=u64(v)&0xffffffffffffULL;
@@ -430,12 +433,12 @@ void on_leave(GumInvocationContext*ic){Invocation*i=gum_invocation_context_get_l
       QueryPerformanceCounter((gint64*)&qpc);
       if(!stopped()&&now>=state.next_due&&qpc>=state.next_due_qpc){
         state.reads=0;state.cycle_start=now;state.cycle_start_qpc=qpc;
-        if(!refresh_local()){state.next_due=now+250;state.next_due_qpc=qpc+(runtime_config[10]+3)/4;state.status=2;}
+        if(!refresh_local()){state.next_due=now+COLLECTION_INTERVAL_MS;state.next_due_qpc=qpc+interval_ticks();state.status=2;}
         else if(i->player==p(PLAYER)){
           g_atomic_int_add(&state.matching,1);
           if(state.last_start){delta=now-state.last_start;if(!state.minimum_interval||delta<state.minimum_interval)state.minimum_interval=delta;if(delta>state.maximum_interval)state.maximum_interval=delta;}
           if(state.last_start_qpc){delta=qpc-state.last_start_qpc;if(!state.minimum_interval_qpc||delta<state.minimum_interval_qpc)state.minimum_interval_qpc=delta;if(delta>state.maximum_interval_qpc)state.maximum_interval_qpc=delta;}
-          state.last_start=now;state.last_start_qpc=qpc;state.next_due=now+250;state.next_due_qpc=qpc+(runtime_config[10]+3)/4;cycle();
+          state.last_start=now;state.last_start_qpc=qpc;state.next_due=now+COLLECTION_INTERVAL_MS;state.next_due_qpc=qpc+interval_ticks();cycle();
         }else g_atomic_int_add(&state.ignored,1);
       }
       g_atomic_int_add(&state.gate,-1);
@@ -456,7 +459,7 @@ guint snapshot(guint64*out){guint i;guint64*s=out;
   s[16]=state.last_native_count;s[17]=state.last_cycle_reads;s[18]=state.status;s[19]=state.reason;s[20]=state.thread_id;
   s[21]=state.last_processed;s[22]=state.last_copied;s[23]=atomic_get(&state.disabled);s[24]=atomic_get(&state.inflight);
   s[25]=atomic_get(&state.selected);s[26]=atomic_get(&state.matching);s[27]=atomic_get(&state.ignored);s[28]=atomic_get(&state.contended);
-  s[29]=state.query_al;s[30]=state.dispatch_inflight;s[31]=250;s[32]=8;s[33]=4096;s[34]=8;s[35]=state.cooldown_pressure;s[36]=state.minimum_interval_qpc;s[37]=state.maximum_interval_qpc;s[38]=state.next_due_qpc;s[39]=runtime_config[10];s[40]=runtime_config[11];s[41]=runtime_config[12];s[42]=state.limit_reached;s[43]=state.ground_dispatches;s[44]=state.ground_completed;s[45]=state.ground_refused;s[46]=runtime_config[14];s[47]=state.container_dispatches;s[48]=state.container_completed;s[49]=state.container_refused;
+  s[29]=state.query_al;s[30]=state.dispatch_inflight;s[31]=COLLECTION_INTERVAL_MS;s[32]=8;s[33]=4096;s[34]=COLLECTION_BUDGET_MS;s[35]=state.cooldown_pressure;s[36]=state.minimum_interval_qpc;s[37]=state.maximum_interval_qpc;s[38]=state.next_due_qpc;s[39]=runtime_config[10];s[40]=runtime_config[11];s[41]=runtime_config[12];s[42]=state.limit_reached;s[43]=state.ground_dispatches;s[44]=state.ground_completed;s[45]=state.ground_refused;s[46]=runtime_config[14];s[47]=state.container_dispatches;s[48]=state.container_completed;s[49]=state.container_refused;
   copy(s+64,state.events,64*16*8);copy(s+64+64*16,state.cadence,64*5*8);copy(s+64+64*16+64*5,state.event_extra,64*4*8);
   g_atomic_int_add(&state.gate,-1);return 1;
 }
