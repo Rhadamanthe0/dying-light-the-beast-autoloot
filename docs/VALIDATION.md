@@ -30,13 +30,25 @@ Premier essai en partie le 18 octobre 2026, après qualification de neuf scénar
 
 L'essai continu suivant a effectué 12 passages et trois ramassages, à environ 1,55 m, 1,91 m et 0,26 m. Les trois sources sont passées à l'état natif consommé, sans invalidation. Les appels ont duré 0,5333 ms, 0,4402 ms et 0,4554 ms ; la cadence QPC était comprise entre 252,4129 et 269,4153 ms, sans dépassement du budget. Retrait, déchargement et détachement ont réussi sans erreur.
 
-Le joueur a confirmé la fluidité et indiqué que le ramassage de l'objet à ses pieds semblait avoir fonctionné. La boucle cadavres + objets reste active à sa demande pour poursuivre les essais. Le bit consommé et le retour de l'appel ne mesurent pas directement le crédit d'inventaire ; aucun relevé chiffré de ce crédit n'a été fait pour les composants. Les armes n'ont pas encore été exercées en partie.
+Le joueur a confirmé la fluidité puis le fonctionnement sur d'autres objets. La boucle cadavres + objets, laissée active à sa demande, a ensuite traité trois nouveaux cadavres et onze objets au sol, sans arrêt natif ni dépassement de budget sur le relevé. Le bit consommé et le retour de l'appel ne mesurent pas directement le crédit d'inventaire ; aucun relevé chiffré de ce crédit n'a été fait pour les composants. Les armes n'ont pas encore été exercées en partie.
 
 L'admissibilité conserve la sélection native et `CanUse`. Seule l'action 1 est acceptée avec un contexte groupe 0, flags `0x20` ; si l'inventaire refuse entre la sélection initiale et l'appel final, le dispatcher rejette l'action 24. Les fixtures couvrent les deux refus. Les routes supplémentaires de redirection sont refusées.
 
+## Sacs et contenants fouillables
+
+Essai en partie du 18 octobre 2026, confirmé par le joueur :
+
+- Source exacte `Container` à 1,179 m, état 1, trois descripteurs de butin, mode local 1, sans enfant ni redirection.
+- Route CBS, générations, droit natif de fouille, flag TakeAll déjà actif et interface ILoot vérifiés avant l'appel. Aucun flag n'a été forcé.
+- Un seul appel du dispatcher normal, action 1 : contenu 3 → 0, état fouillé 5 ; appel mesuré à 1,2924 ms.
+- Plafond d'un appel respecté ; retrait du hook, déchargement et détachement réussis sans erreur.
+- Le joueur a confirmé le ramassage. Le lanceur active désormais cadavres, objets et contenants compatibles dans la même boucle.
+
+Ce parcours concerne le `Container` déjà fouillable en état 1, mode local 1. L'ouverture séparée d'un `ComplexContainer`, les serrures et les autres actions restent exclues de cette version. Les trois types de source possèdent des compteurs distincts.
+
 ## Qualification hors jeu de la boucle résidente
 
-Qualification native : **40 scénarios réussis** (28 cadavres et 12 objets), générés par `tools/autoloot_runtime.py --dummy` pendant l'installation. Le cœur C réel est exécuté dans un processus de test dédié, avec les fonctions du moteur remplacées par des stubs natifs. Les chiffres de cadence du tableau proviennent de la qualification initiale des cadavres.
+Qualification native : **54 scénarios réussis** (28 cadavres, 12 objets et 14 contenants), générés par `tools/autoloot_runtime.py --dummy` pendant l'installation. Le cœur C réel est exécuté dans un processus de test dédié, avec les fonctions du moteur remplacées par des stubs natifs. Les chiffres de cadence du tableau proviennent de la qualification initiale des cadavres.
 
 | Scénario | Résultat mesuré |
 | --- | --- |
@@ -48,19 +60,20 @@ Qualification native : **40 scénarios réussis** (28 cadavres et 12 objets), g�
 | Cycle de vie | Arrêts pendant recherche, fouille ou destruction ; concurrence ; changement de personnage |
 | Bornes | Pagination, limite de lectures, journaux circulaires et saturation du cache de temporisation |
 | Objets au sol | Un ramassage maximal, arrivées continues, refus d'échange avant et pendant le dispatcher, routes redirigées refusées, source consommée, arrêt pendant l'appel, génération du receiver et absence de progression |
+| Contenants | Collecte plafonnée, refus d'état/action/flag/mode/enfant/forward/ILoot/contexte, arrêts pendant sélection ou collecte, absence de progression, option inactive et exclusion de ComplexContainer |
 
 Tous ces scénarios vérifient la restauration du point d'entrée, la fin des workers, les registres conservés et l'équilibre allocation/destruction du vecteur. Le test de saturation des journaux utilise une horloge accélérée ; **il n'entre pas dans les chiffres de cadence réelle ci-dessus**.
 
 La commande `--dummy` exécute également **11 tests du cycle de vie Python** : verrou d'instance, arrêt pendant le démarrage, drainage avant détachement, écriture d'état temporairement bloquée, fermeture du processus, arrêt natif signalé comme erreur et plafond de dispatch atteint sans erreur. **18 tests unitaires supplémentaires** contrôlent notamment les chemins Steam, les dépendances publiées, les commandes d'installation et l'identifiant de lancement indépendant du PID du redirecteur Python Windows.
 
-Le wrapper JavaScript de production est relu séparément : les 40 scénarios natifs ne prétendent pas exécuter son branchement dans le jeu. Les essais en partie décrits plus haut exercent ce branchement.
+Le wrapper JavaScript de production est relu séparément : les 54 scénarios natifs ne prétendent pas exécuter son branchement dans le jeu. Les essais en partie décrits plus haut exercent ce branchement.
 
-Avant l'extension aux objets, l'installation a été exécutée depuis une archive Git propre, sans les anciens dossiers `.deps`, preuves ou sauvegardes. Création d'un environnement Python neuf, installation des dépendances, 28 scénarios natifs, 10 tests hôte et 17 tests unitaires : réussite. Le refus de démarrage lorsque le jeu est fermé a également été vérifié avec le lanceur réel. L'extension conserve les mêmes fichiers et dépendances ; les 40 scénarios natifs, 11 tests hôte et 18 tests unitaires ont été exécutés localement depuis l'installation existante.
+Avant l'extension aux objets, l'installation a été exécutée depuis une archive Git propre, sans les anciens dossiers `.deps`, preuves ou sauvegardes. Création d'un environnement Python neuf, installation des dépendances, 28 scénarios natifs, 10 tests hôte et 17 tests unitaires : réussite. Le refus de démarrage lorsque le jeu est fermé a également été vérifié avec le lanceur réel. Les extensions conservent les mêmes fichiers et dépendances ; les 54 scénarios natifs, 11 tests hôte et 18 tests unitaires ont été exécutés localement depuis l'installation existante.
 
 ## Limites de validation
 
 - La coopération à deux joueurs, les inventaires pleins et les transitions prolongées de session restent à exercer dans le jeu.
-- Seul le wrapper standard `ContainerItem` utilisant la route native Take est traité ; les sous-classes et la classification générale des objets de quête ou tenus ne sont pas qualifiées.
+- Les objets au sol utilisent le wrapper exact `ContainerItem` ; les contenants utilisent le type exact `Container`, dans le mode local qualifié. Les sous-classes, ouvertures distinctes et la classification générale des objets de quête ou tenus ne sont pas qualifiées.
 - Le budget de travail est contrôlé entre appels natifs ; il n'interrompt pas un appel interne du jeu lent.
 - Le déclenchement dépend des ticks actifs du joueur ; il ne fournit pas une horloge indépendante du moteur.
 - Les fixtures n'exercent que des processus possédés par les tests, jamais un processus de jeu.

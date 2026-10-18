@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Path $taskEvidence -Force | Out-Null
 $taskScript = Join-Path $taskRoot 'tools\autoloot_runtime.py'
 $taskStamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
 $taskLaunchToken = [guid]::NewGuid().ToString('N')
-$taskChild = Start-Process -FilePath $taskPython -ArgumentList @('-u', ('"' + $taskScript + '"'), '--live', '--ground-items', '--launch-token', $taskLaunchToken) -WorkingDirectory $taskRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $taskEvidence ($taskStamp + '-stdout.log')) -RedirectStandardError (Join-Path $taskEvidence ($taskStamp + '-stderr.log'))
+$taskChild = Start-Process -FilePath $taskPython -ArgumentList @('-u', ('"' + $taskScript + '"'), '--live', '--ground-items', '--containers', '--launch-token', $taskLaunchToken) -WorkingDirectory $taskRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $taskEvidence ($taskStamp + '-stdout.log')) -RedirectStandardError (Join-Path $taskEvidence ($taskStamp + '-stderr.log'))
 $taskStatusPath = Join-Path $taskEvidence 'status.json'
 $taskDeadline = [DateTime]::UtcNow.AddSeconds(30)
 while ([DateTime]::UtcNow -lt $taskDeadline) {
@@ -16,7 +16,7 @@ while ([DateTime]::UtcNow -lt $taskDeadline) {
     try { if (Test-Path -LiteralPath $taskStatusPath) { $taskState = Get-Content -LiteralPath $taskStatusPath -Raw | ConvertFrom-Json } } catch { }
     if ($taskState -and $taskState.launch_token -eq $taskLaunchToken) {
         if ($taskState.running -and $taskState.phase -in @('active', 'running')) {
-            Write-Host 'AutoLoot actif : cadavres et objets au sol, rayon 5 m, passage toutes les 250 ms.'
+            Write-Host 'AutoLoot actif : cadavres, objets et contenants compatibles, rayon 5 m, passage toutes les 250 ms.'
             Write-Host 'Pour arreter : Arreter-AutoLoot.cmd.'
             exit 0
         }

@@ -19,6 +19,7 @@ void ctor(gpointer ctx,gpointer actor,gint action,guint8 fourth,guint8 fifth){gu
  for(i=0;i<48;i++)if(((guint8*)ctx)[i])stats[1]++;
  *(gpointer*)ctx=actor;((guint8*)ctx)[0x18]=0x20;block(1);
  if(load(controls+4)==9)((guint8*)ctx)[48]=0;
+ if(load(controls+4)==12)((guint8*)ctx)[0x18]=0x24;
 }
 gpointer resolve(gpointer pool,guint64 handle){stats[2]++;
  if((guint64)pool!=cfg[16]){stats[3]++;return NULL;}
@@ -38,7 +39,7 @@ guint8 dispatch(gpointer player,guint64 handle,gpointer ctx){guint64 component,h
  if(load(controls+5)){
    body=component==cfg[9]?cfg[7]:cfg[26];block(3);
    if(load(controls+4)==10)return 0; /* Internal re-selection changedTake1 toSwap24: vanilla rejects. */
-   if(load(controls+4)!=3)*(guint8*)(body+0x4f0)|=1;stats[15]++;return 1;
+   if(load(controls+4)!=3){if(load(controls+5)==2){*(guint*)(body+0x4d0)=0;*(guint*)(body+0x388)=5;}else *(guint8*)(body+0x4f0)|=1;}stats[15]++;return 1;
  }
  human=*(guint64*)(*(guint64*)(component+0x598)+0x28);body=*(guint64*)(human+0x2558);
  block(3);if(load(controls+4)!=3&&load(controls+4)!=8){*(guint*)(body+0x4d0)=0;*(guint*)(body+0x388)=5;}return 1;
@@ -140,7 +141,7 @@ function initialize(mode){
  if(mode==='bounded_logs'){controls.add(28).writeS32(1);controls.add(12).writeS32(0x17);}
  if(mode==='ambiguous'){n(s.handles.add(8),s.handle);s.entity.add(0x80).writeU32(2);}
 
- if(mode.startsWith('ground_')){
+ if(mode.startsWith('ground_')||mode.startsWith('container_')){
   controls.add(20).writeS32(1);n(runtimeConfig.add(11*8),1);n(runtimeConfig.add(12*8),1);n(runtimeConfig.add(13*8),0);
   image.add(0x2d326f8+0x128).writePointer(image.add(0x24ec9b6));image.add(0x257b948).writePointer(image.add(0xfba70));image.add(0x27ecee0+8).writePointer(image.add(0x80cb40));
   for(let i=0;i<2;i++){const a=sources[i],m=groundMeta[i],pg=storage.add(i*0x4000);
@@ -165,6 +166,24 @@ function initialize(mode){
   if(mode==='ground_continuous'){n(runtimeConfig.add(12*8),0);controls.add(16).writeS32(7);}
   if(mode==='ground_receiver_generation'){n(runtimeConfig.add(12*8),0);controls.add(16).writeS32(11);}
   if(mode==='ground_no_progress'){n(runtimeConfig.add(12*8),0);controls.add(16).writeS32(3);}
+  if(mode.startsWith('container_')){
+   controls.add(20).writeS32(2);n(runtimeConfig.add(11*8),0);n(runtimeConfig.add(14*8),1);
+   image.add(0x29e8448+0x20).writePointer(image.add(0x1185870));
+   for(const a of sources){q(a.body,image.add(0x29e6ff8));q(a.body.add(0x10),image.add(0x29e7730));q(a.body.add(0x20),image.add(0x29e7a08));q(a.body.add(0x3d8),image.add(0x29e8448));a.body.add(0x59e).writeU8(0x2f);a.body.add(0x4c8).writeByteArray(new Uint8Array(16));a.body.add(0x4d0).writeU32(3);}
+   if(mode==='container_wrong_state')sources.forEach(a=>a.body.add(0x388).writeU32(2));
+   if(mode==='container_other_action')controls.add(12).writeS32(7);
+   if(mode==='container_context')controls.add(16).writeS32(12);
+   if(mode==='container_flag')sources.forEach(a=>a.body.add(0x59e).writeU8(0x27));
+   if(mode==='container_mode')sources.forEach(a=>a.body.add(0x508).writeS32(-1));
+   if(mode==='container_nested')sources.forEach(a=>q(a.body.add(0x570),a.body));
+   if(mode==='container_forward')sources.forEach(a=>n(a.component.add(0x450),1));
+   if(mode==='container_iloot')sources.forEach(a=>q(a.body.add(0x3d8),image.add(0x29e8440)));
+   if(mode==='container_blocked_dispatch')controls.writeS32(3);
+   if(mode==='container_blocked_select')controls.writeS32(2);
+   if(mode==='container_no_progress'){n(runtimeConfig.add(12*8),0);controls.add(16).writeS32(3);}
+   if(mode==='container_disabled')n(runtimeConfig.add(14*8),0);
+   if(mode==='container_complex_layout')sources.forEach(a=>{q(a.body,image.add(0x29ed590));a.body.add(0x4d0).writeU32(0xffffffff);});
+  }
  }
 }
 // Wrapper sets/checks Win64 callee-saved GPR and SIMD canaries and preserves RAX.
@@ -186,7 +205,7 @@ q(tickAddress,wrapper);
 
 const original=Array.from(new Uint8Array(fixture.tick.readByteArray(16)));let listener=null,handles=[],workers=[],joined=true;
 function allJoined(){if(handles.some(h=>wait(h,0)!==0))return false;handles.forEach(h=>close(h));handles=[];joined=true;return true;}
-function snapshot(){const okay=snap(snapBuffer)!==0;return {snapshot_available:okay,values:okay?Array.from({length:46},(_,i)=>snapBuffer.add(i*8).readU64().toString()):[],
+function snapshot(){const okay=snap(snapBuffer)!==0;return {snapshot_available:okay,values:okay?Array.from({length:50},(_,i)=>snapBuffer.add(i*8).readU64().toString()):[],
  events:okay?Array.from({length:Math.min(snapBuffer.add(13*8).readU64().toNumber(),64)},(_,i)=>Array.from({length:16},(_,j)=>snapBuffer.add((64+i*16+j)*8).readU64().toString())):[],
  cadence:okay?Array.from({length:Math.min(snapBuffer.add(15*8).readU64().toNumber(),64)},(_,i)=>Array.from({length:5},(_,j)=>snapBuffer.add((64+64*16+i*5+j)*8).readU64().toString())):[],
  stats:Array.from({length:16},(_,i)=>fixtureStats.add(i*8).readU64().toNumber()),blocked:controls.add(4).readS32(),

@@ -1,6 +1,6 @@
 # AutoLoot — Dying Light: The Beast
 
-Prototype Windows pour fouiller automatiquement les cadavres et ramasser les objets standard au sol à **5 mètres**, sans viser ni appuyer sur une touche.
+Prototype Windows pour fouiller automatiquement les cadavres, les sacs et contenants compatibles, et ramasser les composants au sol à **5 mètres**, sans viser ni appuyer sur une touche.
 
 Le mode résident prévoit un passage toutes les **250 ms** sur les mises à jour du joueur. La distance, la source et l'autorisation de ramassage sont revérifiées avant l'action normale du jeu. Les cadavres initialement vides sont également pris en charge.
 
@@ -9,8 +9,11 @@ Le mode résident prévoit un passage toutes les **250 ms** sur les mises à jou
 - Le ramassage réel a déjà été confirmé en partie : **5 unités d'argent de l'ancien monde** reçues ; une fouille automatique a aussi réussi à **4,54 m**.
 - Le mode résident a été confirmé en partie : butin reçu et jeu fluide. Sur un relevé de 15 secondes, les passages étaient espacés de 253,80 à 265,63 ms. Voir [les vérifications et leurs limites](docs/VALIDATION.md).
 - La coopération conserve le dispatcher du joueur local ; **le résultat à deux joueurs reste à vérifier**.
-- Le ramassage des composants au sol est ajouté et exercé en partie. Les essais sur d'autres objets restent en cours.
+- Le ramassage des composants au sol est confirmé par le joueur. La boucle combinée a également traité trois nouveaux cadavres et onze objets au sol pendant ses déplacements.
+- La fouille d'un sac a été confirmée en partie : ses trois entrées de butin ont été récupérées automatiquement. Le lanceur active aussi les contenants compatibles.
 - Le prototype conserve les refus du jeu : il ne force pas l'action d'échange lorsqu'une arme ne peut pas entrer dans l'inventaire. Les armes n'ont pas encore été vérifiées en partie.
+
+Les contenants déjà fouillables sont traités. Les coffres verrouillés ou nécessitant une ouverture distincte restent à ouvrir manuellement.
 
 ## Configuration requise
 
@@ -27,7 +30,7 @@ Aucun compilateur ni remplacement de fichier du jeu n'est nécessaire. Les dépe
 2. Double-cliquer sur **`Installer-AutoLoot.cmd`**. L'installation crée l'environnement Python et exécute les contrôles hors jeu. Attendre le message de réussite.
 3. Lancer le jeu et charger une partie.
 4. Double-cliquer sur **`Lancer-AutoLoot.cmd`**. Le message « AutoLoot actif » confirme que le programme est attaché. En cas d'échec, la fenêtre affiche la raison.
-5. Se déplacer normalement : les cadavres admissibles sont fouillés et les objets standard ramassables sont récupérés à moins de 5 mètres.
+5. Se déplacer normalement : les cadavres, sacs et contenants admissibles sont fouillés ; les objets standard ramassables sont récupérés à moins de 5 mètres.
 
 Pour arrêter, double-cliquer sur **`Arreter-AutoLoot.cmd`**. Une action native déjà commencée se termine avant le retrait. Fermer le jeu termine également le programme. Après avoir relancé le jeu, relancer AutoLoot.
 

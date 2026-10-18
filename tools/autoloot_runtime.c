@@ -35,6 +35,7 @@ typedef struct {
   guint64 cycle_start_qpc;
   guint64 limit_reached,ground_dispatches,ground_completed,ground_refused;
   guint64 event_extra[64][4];
+  guint64 container_dispatches,container_completed,container_refused;
 } State;
 extern State state;
 typedef struct {gpointer player;} Invocation;
@@ -207,12 +208,14 @@ static gboolean item_callbacks(void){
   }
   return mask==7&&seen==3;
 }
-static gboolean guard_item(Witness*w){
-  guint64 v;guint8 vector[16],flag,forwarding[24];guint count,i;float d,dist=0;
+static gboolean guard_cbs(Witness*w){
+  guint64 v;guint8 vector[16],flag,forwarding[24];guint count,i,primary,control,igs;float d,dist=0;
+  switch(cfg[SOURCE_KIND]){case 1:primary=0x29ec228;control=0x29ec8f0;igs=0x29ecbc8;break;
+    case 2:primary=0x29e6ff8;control=0x29e7730;igs=0x29e7a08;break;default:return FALSE;}
   state.reason=40;
-  if(!local_guard()||!is_type(cfg[BODY],0x29ec228)||!is_type(cfg[PROXY],0x2d326f8)||
+  if(!local_guard()||!is_type(cfg[BODY],primary)||!is_type(cfg[PROXY],0x2d326f8)||
      !is_type(cfg[COMPONENT],0x293c8c0)||!pool_guard()||!pool_pair(cfg[PROXY],cfg[RECEIVER_HANDLE]))return FALSE;
-  QEQ(cfg[BODY]+0x10,cfg[BASE]+0x29ec8f0);QEQ(cfg[BODY]+0x20,cfg[BASE]+0x29ecbc8);
+  QEQ(cfg[BODY]+0x10,cfg[BASE]+control);QEQ(cfg[BODY]+0x20,cfg[BASE]+igs);
   QEQ(cfg[BODY]+0x38,cfg[PROXY]);QEQ(cfg[PROXY]+0x10,cfg[ENTITY]);QEQ(cfg[PROXY]+0x48,cfg[BODY]+0x20);
   QEQ(cfg[BASE]+0x2d326f8+0x128,cfg[BASE]+0x24ec9b6);QEQ(cfg[BASE]+0x257b948,runtime_config[7]+0xfba70);
   QEQ(cfg[COMPONENT]+0x10,cfg[ENTITY]);QEQ(cfg[COMPONENT]+0x598,0);
@@ -228,18 +231,28 @@ static gboolean guard_item(Witness*w){
   QEQ(cfg[BODY]+0x280,cfg[BODY]+0x268);QEQ(cfg[BODY]+0x278,cfg[RECEIVER_TABLE]);
   if(!rpm(cfg[BODY]+0x2a0,&flag,1)||flag||!item_callbacks())return FALSE;
   state.reason=42;
-  if(!rpm(cfg[BODY]+0x4f0,&flag,1)||(flag&1))return FALSE;
+  switch(cfg[SOURCE_KIND]){
+    case 1:if(!rpm(cfg[BODY]+0x4f0,&flag,1)||(flag&1))return FALSE;w->count=1;w->body_state=flag;cfg[EXPECTED_COUNT]=flag;break;
+    case 2:
+      if(!rpm(cfg[BODY]+0x59e,&flag,1)||!(flag&8)||!rpm(cfg[BODY]+0x508,&state.take_mode,4)||state.take_mode!=1||
+         !q(cfg[BODY]+0x570,&state.nested_container)||state.nested_container)return FALSE;
+      QEQ(cfg[BODY]+0x3d8,cfg[BASE]+0x29e8448);QEQ(cfg[BASE]+0x29e8448+0x20,cfg[BASE]+0x1185870);
+      if(!rpm(cfg[BODY]+0x4c8,vector,16)||!rpm(cfg[BODY]+0x388,&w->body_state,4)||w->body_state!=1)return FALSE;
+      w->count=vector[7]?vector[7]-1:u32(vector+8);if(w->count>512||w->count!=cfg[EXPECTED_COUNT])return FALSE;break;
+    default:return FALSE;
+  }
   if(!position(cfg[PLAYER],w->player)||!position(cfg[BODY],w->body))return FALSE;
   for(i=0;i<3;i++){d=w->player[i]-w->body[i];dist+=d*d;}if(dist>25.0f)return FALSE;
-  w->count=1;w->body_state=flag;w->body_pointer=cfg[BODY];w->component=cfg[COMPONENT];w->human=cfg[PROXY];
-  cfg[EXPECTED_COUNT]=flag;state.reason=0;return TRUE;
+  w->body_pointer=cfg[BODY];w->component=cfg[COMPONENT];w->human=cfg[PROXY];
+  state.reason=0;return TRUE;
 }
-static gboolean guard(Witness*w){return cfg[SOURCE_KIND]?guard_item(w):guard_body(w);}
-static gboolean bind_item(guint64 item){
-  guint64 v,poolwords[2],packed,handle,c,owner;guint8 vec[16];guint count,i,offset,found=0;
-  cfg[SOURCE_KIND]=1;cfg[BODY]=item;cfg[HUMAN]=cfg[PROXY]=cfg[HANDLE]=cfg[COMPONENT]=0;
+static gboolean guard(Witness*w){switch(cfg[SOURCE_KIND]){case 0:return guard_body(w);case 1:case 2:return guard_cbs(w);default:return FALSE;}}
+static gboolean bind_cbs(guint64 item,guint kind){
+  guint64 v,poolwords[2],packed,handle,c,owner;guint8 vec[16];guint count,i,offset,found=0,primary;
+  switch(kind){case 1:primary=0x29ec228;break;case 2:primary=0x29e6ff8;break;default:return FALSE;}
+  cfg[SOURCE_KIND]=kind;cfg[BODY]=item;cfg[HUMAN]=cfg[PROXY]=cfg[HANDLE]=cfg[COMPONENT]=0;
   state.reason=43;
-  if(!is_type(item,0x29ec228)||!q(item+0x38,&cfg[PROXY])||!is_type(cfg[PROXY],0x2d326f8)||
+  if(!is_type(item,primary)||!q(item+0x38,&cfg[PROXY])||!is_type(cfg[PROXY],0x2d326f8)||
      !q(cfg[PROXY]+0x10,&cfg[ENTITY])||!rpm(cfg[ENTITY]+0x78,vec,16)||!q(cfg[POOL_SLOT],&cfg[POOL])||!rpm(cfg[POOL],poolwords,16))return FALSE;
   cfg[HUMAN]=cfg[PROXY];cfg[STORAGE]=poolwords[0];packed=u64(vec);count=vec[7]?vec[7]-1:u32(vec+8);
   if(!count||count>128)return FALSE;
@@ -253,6 +266,7 @@ static gboolean bind_item(guint64 item){
   if(found!=1||!q(cfg[COMPONENT]+0x78,&cfg[SENDER_NODE])||!cfg[SENDER_NODE]||!q(cfg[SENDER_NODE]+8,&cfg[RECEIVER_HANDLE])||
      !q(cfg[SENDER_NODE]+0x10,&cfg[RECEIVER_CALLBACK])||cfg[RECEIVER_CALLBACK]!=item+0x270||
      !q(item+0x278,&cfg[RECEIVER_TABLE]))return FALSE;
+  if(kind==2){if(!rpm(item+0x4c8,vec,16))return FALSE;cfg[EXPECTED_COUNT]=vec[7]?vec[7]-1:u32(vec+8);if(cfg[EXPECTED_COUNT]>512)return FALSE;}
   return TRUE;
 }
 static gboolean ground_context(void){guint8*ctx=p(CONTEXT);
@@ -279,7 +293,8 @@ static void cool(gint slot,guint milliseconds,guint failed){Cooldown*c=&state.co
   c->body=cfg[BODY];c->human=cfg[HUMAN];c->handle=cfg[HANDLE];c->receiver_handle=cfg[SOURCE_KIND]?cfg[RECEIVER_HANDLE]:0;
   c->until=GetTickCount64()+milliseconds;c->failed=failed;}
 static Post post(void){Post out={0,0,0};guint8 b[16];
-  if(!is_type(cfg[BODY],0x29e84f0)||!is_type(cfg[HUMAN],0x2962618)||!is_type(cfg[PLAYER],0x259c450)||
+  if((cfg[SOURCE_KIND]==0&&(!is_type(cfg[BODY],0x29e84f0)||!is_type(cfg[HUMAN],0x2962618)))||
+     (cfg[SOURCE_KIND]==2&&!is_type(cfg[BODY],0x29e6ff8))||!is_type(cfg[PLAYER],0x259c450)||
      !rpm(cfg[BODY]+0x4c8,b,16)||!rpm(cfg[BODY]+0x388,&out.body_state,4))return out;
   out.count=b[7]?b[7]-1:u32(b+8);out.valid=out.count<=512;return out;
 }
@@ -289,7 +304,7 @@ static void event(guint status,gint action,guint eligible,guint al,Post after,gu
   for(i=0;i<3;i++){d=before->player[i]-before->body[i];ds+=d*d;}
   e[0]=state.cycles;e[1]=GetTickCount64();e[2]=cfg[BODY];e[3]=cfg[HUMAN];e[4]=cfg[HANDLE];e[5]=status;e[6]=state.reason;
   e[7]=before->count;e[8]=after.count;e[9]=after.body_state;e[10]=(guint64)(gint64)action;e[11]=eligible;e[12]=al;
-  extra[0]=cfg[SOURCE_KIND];extra[1]=cfg[SOURCE_KIND]?cfg[EXPECTED_COUNT]:0;extra[2]=after.ground_flags;extra[3]=after.invalidated;
+  extra[0]=cfg[SOURCE_KIND];extra[1]=cfg[SOURCE_KIND]==1?cfg[EXPECTED_COUNT]:0;extra[2]=after.ground_flags;extra[3]=after.invalidated;
   e[13]=state.reads-reads_before;e[14]=end-start;e[15]=ds>=0&&ds<=25?(guint)(ds*1000000.0f):~0ULL;state.events_total++;
 }
 static gboolean action(void){
@@ -316,20 +331,20 @@ static gboolean action(void){
   cool_slot=reserve_cooldown();if(cool_slot<0){status=11;goto done;}
   if(runtime_config[12]&&state.dispatches>=runtime_config[12]){state.limit_reached=1;status=12;goto done;}
   state.dispatch_inflight=1;state.dispatches++;did_dispatch=1;
-  if(cfg[SOURCE_KIND])state.ground_dispatches++;
+  switch(cfg[SOURCE_KIND]){case 0:break;case 1:state.ground_dispatches++;break;case 2:state.container_dispatches++;break;}
   if(runtime_config[12]&&state.dispatches>=runtime_config[12])state.limit_reached=1;
   al=player_dispatch(p(PLAYER),cfg[HANDLE],ctx);
   state.dispatch_inflight=0;
   /* Post reads finish even if stop/budget became true inside native dispatch. */
-  state.post_phase=1;result=cfg[SOURCE_KIND]?post_item():post();state.post_phase=0;
-  status=result.valid&&result.count==0&&(cfg[SOURCE_KIND]||result.body_state==5)?1:10;
+  state.post_phase=1;result=cfg[SOURCE_KIND]==1?post_item():post();state.post_phase=0;
+  status=result.valid&&result.count==0&&(cfg[SOURCE_KIND]==1||result.body_state==5)?1:10;
   if(!canaries())status=6;
-  if(status==1){if(cfg[SOURCE_KIND])state.ground_completed++;else state.completed++;}
+  if(status==1){switch(cfg[SOURCE_KIND]){case 0:state.completed++;break;case 1:state.ground_completed++;break;case 2:state.container_completed++;break;}}
   goto done;
 cancel:
   status=stopped()?7:8;
 done:
-  if(status!=1){state.refused++;if(cfg[SOURCE_KIND])state.ground_refused++;}
+  if(status!=1){state.refused++;switch(cfg[SOURCE_KIND]){case 1:state.ground_refused++;break;case 2:state.container_refused++;break;}}
   /* Pre-dispatch refusal can change by next tick (e.g. alive->dead): no long cache.
    * Native no-progress is not retried for60s for this exact generation tuple. */
   if(status==1)cool(cool_slot,30000,0);else if(did_dispatch)cool(cool_slot,60000,1);
@@ -369,7 +384,8 @@ destroy:
     if(!checkpoint())break;
     if(raw[i]<0x10010){processed++;continue;}
     {guint64 vt;if(!q(raw[i]-0x10,&vt))break;
-      if(vt==cfg[BASE]+0x29ec228&&runtime_config[11]){if(bind_item(raw[i]-0x10))goto bound;}
+      if(vt==cfg[BASE]+0x29ec228&&runtime_config[11]){if(bind_cbs(raw[i]-0x10,1))goto bound;}
+      else if(vt==cfg[BASE]+0x29e6ff8&&runtime_config[14]){if(bind_cbs(raw[i]-0x10,2))goto bound;}
       else if(vt==cfg[BASE]+0x29e84f0&&runtime_config[13]){if(bind_body(raw[i]-0x10))goto bound;}
       else {processed++;continue;}
     }
@@ -440,7 +456,7 @@ guint snapshot(guint64*out){guint i;guint64*s=out;
   s[16]=state.last_native_count;s[17]=state.last_cycle_reads;s[18]=state.status;s[19]=state.reason;s[20]=state.thread_id;
   s[21]=state.last_processed;s[22]=state.last_copied;s[23]=atomic_get(&state.disabled);s[24]=atomic_get(&state.inflight);
   s[25]=atomic_get(&state.selected);s[26]=atomic_get(&state.matching);s[27]=atomic_get(&state.ignored);s[28]=atomic_get(&state.contended);
-  s[29]=state.query_al;s[30]=state.dispatch_inflight;s[31]=250;s[32]=8;s[33]=4096;s[34]=8;s[35]=state.cooldown_pressure;s[36]=state.minimum_interval_qpc;s[37]=state.maximum_interval_qpc;s[38]=state.next_due_qpc;s[39]=runtime_config[10];s[40]=runtime_config[11];s[41]=runtime_config[12];s[42]=state.limit_reached;s[43]=state.ground_dispatches;s[44]=state.ground_completed;s[45]=state.ground_refused;
+  s[29]=state.query_al;s[30]=state.dispatch_inflight;s[31]=250;s[32]=8;s[33]=4096;s[34]=8;s[35]=state.cooldown_pressure;s[36]=state.minimum_interval_qpc;s[37]=state.maximum_interval_qpc;s[38]=state.next_due_qpc;s[39]=runtime_config[10];s[40]=runtime_config[11];s[41]=runtime_config[12];s[42]=state.limit_reached;s[43]=state.ground_dispatches;s[44]=state.ground_completed;s[45]=state.ground_refused;s[46]=runtime_config[14];s[47]=state.container_dispatches;s[48]=state.container_completed;s[49]=state.container_refused;
   copy(s+64,state.events,64*16*8);copy(s+64+64*16,state.cadence,64*5*8);copy(s+64+64*16+64*5,state.event_extra,64*4*8);
   g_atomic_int_add(&state.gate,-1);return 1;
 }
