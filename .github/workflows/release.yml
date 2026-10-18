@@ -17,7 +17,7 @@ env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 jobs:
   build:
-    runs-on: windows-2022
+    runs-on: windows-latest
     timeout-minutes: 20
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -31,6 +31,11 @@ jobs:
         with:
           python-version: '3.14'
           architecture: x64
+      - name: Use canonical temporary paths
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
       - name: Validate release version
         id: version
         shell: pwsh
@@ -42,9 +47,13 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
           "source_sha=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT
       - name: Install build dependencies
-        run: python -m pip install -r requirements.txt
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create the build environment' }
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt
       - name: Regression tests
-        run: python -m unittest discover -s tests -v
+        run: .\.venv\Scripts\python.exe -m unittest discover -s tests -v
       - name: Install pinned build compiler
         shell: pwsh
         run: |
@@ -59,7 +68,7 @@ jobs:
           if ($process.ExitCode -ne 0) { throw 'Compiler installation failed' }
           "AUTOLOOT_ISCC=$(Join-Path $directory 'ISCC.exe')" >> $env:GITHUB_ENV
       - name: Build and qualify standalone installer
-        run: python tools/build_installer.py --iscc "$env:AUTOLOOT_ISCC"
+        run: .\.venv\Scripts\python.exe tools/build_installer.py --iscc "$env:AUTOLOOT_ISCC"
       - name: Create checksum
         shell: pwsh
         env:
