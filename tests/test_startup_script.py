@@ -23,9 +23,9 @@ class StartupScriptTests(unittest.TestCase):
         return result
 
     def sandbox(self, folder):
-        for name in ('AutoLoot-Common.ps1', 'Arreter-AutoLoot.ps1'):
-            shutil.copy2(ROOT / name, folder / name)
-        return ". (Join-Path $PSScriptRoot 'AutoLoot-Common.ps1')\nfunction Get-AutoLootStartupPath { Join-Path $PSScriptRoot 'test-startup.lnk' }\n"
+        (folder / 'tools').mkdir()
+        shutil.copy2(ROOT / 'tools/manage.ps1', folder / 'tools/manage.ps1')
+        return ". (Join-Path $PSScriptRoot 'tools/manage.ps1')\nfunction Get-AutoLootStartupPath { Join-Path $PSScriptRoot 'test-startup.lnk' }\n"
 
     def test_real_shortcut_roundtrip_and_foreign_shortcut_refused(self):
         with tempfile.TemporaryDirectory(prefix='autoloot-startup-') as temp:
@@ -87,13 +87,13 @@ while time.monotonic()<deadline:
                         child.terminate()
                     child.wait(timeout=5)
 
-    def test_update_refuses_to_continue_after_stop_timeout_without_watcher(self):
+    def test_update_refuses_to_continue_after_stop_failure_without_watcher(self):
         with tempfile.TemporaryDirectory(prefix='autoloot-update-refusal-') as temp:
             folder = Path(temp)
             script = self.sandbox(folder)
-            # Exercise the actual caller contract for the stop script's timeout exit.
-            (folder / 'Arreter-AutoLoot.ps1').write_text('param([string]$Root)\nexit 1\n')
+            # Exercise the caller contract when cooperative worker shutdown fails.
             script += '''
+function Pause-AutoLoot([string]$InstallationRoot) { throw 'Owned shutdown failure' }
 $refused = $false
 try { Stop-AutoLootInstallation $PSScriptRoot } catch { $refused = $true }
 if (-not $refused) { throw 'Update continued after failed stop' }
@@ -104,9 +104,7 @@ if (-not $refused) { throw 'Update continued after failed stop' }
         with tempfile.TemporaryDirectory(prefix='autoloot-resume-closing-') as temp:
             folder = Path(temp)
             self.sandbox(folder)
-            shutil.copy2(ROOT / 'Lancer-AutoLoot.ps1', folder / 'Lancer-AutoLoot.ps1')
             venv.EnvBuilder(with_pip=False).create(folder / '.venv')
-            (folder / 'tools').mkdir()
             (folder / 'tools/autoloot_watch.py').write_text('''
 import json, os, sys, time
 from datetime import datetime, timezone
@@ -136,7 +134,7 @@ time.sleep(1)
                         self.fail('Owned closing process did not publish state')
                     time.sleep(.01)
                 result = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-                                         str(folder / 'Lancer-AutoLoot.ps1')], capture_output=True, text=True, timeout=10)
+                                         str(folder / 'tools/manage.ps1'), '-Action', 'Resume'], capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 status = json.loads((evidence / 'watch-status.json').read_text())
                 self.assertNotEqual(status['host_pid'], child.pid)

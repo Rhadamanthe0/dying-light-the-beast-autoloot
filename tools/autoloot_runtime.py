@@ -276,7 +276,7 @@ def _live(args):
         kind=m.get('payload',{}).get('type') if m.get('type')=='send' else None
         if kind=='armed':
             report['live_executed']=True;armed.set()
-            if not status('active',True,True,'AutoLoot actif : rayon2m, intervalle100ms'):
+            if not status('active',True,True,'AutoLoot active: 2 m radius, 100 ms interval'):
                 report['errors'].append('Active status could not be published; stopping cooperatively');stopped.set()
             print('armed: resident native100ms autoloot',flush=True)
         if kind=='stopped' or m.get('type')=='error':stopped.set()
@@ -298,12 +298,12 @@ def _live(args):
         return outcome.get('value'),late
     try:
         if (pause_path is not None and pause_path.exists()) or clear_stale_stop(stop_path):
-            report['stop_before_setup']=True;status('stopped',False,False,'Arrêt demandé avant activation');raise _StopRequested()
-        if not status('starting',True,False,'Vérification de la partie et du runtime'):
+            report['stop_before_setup']=True;status('stopped',False,False,'Stop requested before activation');raise _StopRequested()
+        if not status('starting',True,False,'Checking game session and runtime'):
             raise OSError('Startup status could not be published; no hook installed')
         api=discovery.api_setup();pids=discovery.process_ids(api)
         if not pids or (getattr(args,'pid',None) is not None and args.pid not in pids):
-            report['game_closed']=True;status('game_closed',False,False,'Le jeu est fermé');raise _StopRequested()
+            report['game_closed']=True;status('game_closed',False,False,'The game is closed');raise _StopRequested()
         config,proof=prepare(getattr(args,'session',None),args.duration,getattr(args,'pid',None),getattr(args,'ground_items',False),getattr(args,'max_dispatches',0),getattr(args,'ground_only',False),getattr(args,'containers',False),getattr(args,'containers_only',False));report['preflight']=proof
         if stop_requested():report['stop_before_setup']=True;raise _StopRequested()
         raw=Path(__file__).with_suffix('.c').read_bytes()
@@ -332,7 +332,7 @@ def _live(args):
                     report['errors'].append('Native runtime disabled itself; stopping after a guard/canary fault');break
                 if value['result'].get('stats',{}).get('dispatch_limit_reached',0)>0:
                     report['dispatch_limit_reached']=True;break
-                if not status('active',True,True,'AutoLoot actif'):
+                if not status('active',True,True,'AutoLoot active'):
                     report['errors'].append('Status publication failed; stopping cooperatively');break
                 save()
             stopped.wait(.5)
@@ -342,7 +342,7 @@ def _live(args):
         if not detached.is_set():report['errors'].append(type(error).__name__+': '+str(error))
     finally:
         if script is not None and load_requested and not detached.is_set():
-            status('stopping',True,False,'Arrêt coopératif et drainage des appels natifs')
+            status('stopping',True,False,'Stopping cooperatively and waiting for native calls')
             try:report['cleanup']['stop_rpc']=lifecycle.bounded(script.exports_sync.stop,3)
             except (Exception,KeyboardInterrupt) as error:report['cleanup']['stop_error']=str(error)
             if 'stop_error' in report['cleanup']:
@@ -391,7 +391,7 @@ def _live(args):
         if closed:report['ok']=not report['errors'];report['game_closed']=True
         if report.get('stop_before_setup'):report['ok']=not report['errors']
         phase='game_closed' if closed else 'stopped' if report['ok'] else 'error'
-        status(phase,False,False,'Le jeu est fermé' if closed else 'AutoLoot arrêté' if report['ok'] else '; '.join(report['errors']) or 'Nettoyage incomplet')
+        status(phase,False,False,'The game is closed' if closed else 'AutoLoot stopped' if report['ok'] else '; '.join(report['errors']) or 'Incomplete cleanup')
         save()
     print(json.dumps({'output':str(args.output),'ok':report['ok'],'status':report['result'].get('status'),'errors':report['errors']}))
     return 0 if report['ok'] else 1

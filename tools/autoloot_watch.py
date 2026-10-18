@@ -90,7 +90,7 @@ class WatcherInstance:
         if ctypes.get_last_error() == 183:
             self.kernel.CloseHandle(self.handle)
             self.handle = None
-            raise AlreadyWatching('La surveillance AutoLoot est déjà active.')
+            raise AlreadyWatching('AutoLoot watcher is already running.')
         return self
 
     def __exit__(self, *ignored):
@@ -170,7 +170,7 @@ class WindowsBackend:
         if not pids:
             return {'ready': False, 'phase': 'waiting_game'}
         if len(pids) != 1:
-            return {'ready': False, 'phase': 'waiting_session', 'reason': 'Plusieurs processus de jeu : activation refusée.'}
+            return {'ready': False, 'phase': 'waiting_session', 'reason': 'Multiple game processes found; activation refused.'}
         try:
             # Existing discovery has a 1s/4096 reads/8MiB memory budget and no injection.
             return self.discovery.discover(pids[0])
@@ -180,7 +180,7 @@ class WindowsBackend:
     def spawn(self, proof, token):
         session_path = self.args.status.with_name('watch-session.json')
         if not write_json(session_path, proof):
-            raise OSError('Impossible d’enregistrer la découverte fraîche ; aucun worker lancé.')
+            raise OSError('Cannot save fresh session discovery; no worker started.')
         self.args.worker_log.parent.mkdir(parents=True, exist_ok=True)
         if self.args.worker_log.exists() and self.args.worker_log.stat().st_size > 2 * 1024 * 1024:
             os.replace(self.args.worker_log, self.args.worker_log.with_suffix('.log.old'))
@@ -300,7 +300,7 @@ class Watcher:
         if paused:
             return self.status('paused')
         if self.backend.runtime_running():
-            return self.status('external_worker', 'Une autre instance AutoLoot est déjà active.')
+            return self.status('external_worker', 'Another AutoLoot instance is already running.')
         proof = self.backend.ready()
         # Stop/pause may arrive during disk hashing or bounded readiness reads.
         paused, shutting_down = self.controls()
@@ -312,9 +312,9 @@ class Watcher:
         pid = proof.get('pid')
         birth = proof.get('process_identity', {}).get('creation_time_100ns')
         if not isinstance(pid, int) or pid <= 0 or not str(birth).isdigit() or self.backend.identity(pid) != str(birth):
-            raise ValueError('Identité du jeu modifiée après la découverte ; aucun worker lancé.')
+            raise ValueError('Game identity changed after discovery; no worker started.')
         if self.backend.runtime_running() or any(p.exists() for p in (self.args.pause_file, self.args.watch_stop_file)):
-            return self.status('waiting_session', 'Activation annulée par une demande de contrôle ou une autre instance.')
+            return self.status('waiting_session', 'Activation cancelled by a control request or another instance.')
         # A fresh worker requires a visible acknowledgement; existing workers still
         # retain their references and drain normally when later status writes fail.
         self.status('waiting_session', 'Preparing AutoLoot activation')
@@ -396,7 +396,7 @@ def parse_args(argv=None):
     parser.add_argument('--log', type=Path, default=DATA / 'watch.log')
     args = parser.parse_args(argv)
     if args.poll_seconds != POLL_SECONDS:
-        parser.error('La surveillance utilise un intervalle fixe de10secondes.')
+        parser.error('The watcher uses a fixed 10-second polling interval.')
     return args
 
 

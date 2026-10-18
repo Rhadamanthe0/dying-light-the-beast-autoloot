@@ -23,8 +23,9 @@ class StopScriptTests(unittest.TestCase):
     def _assert_stop_waits(self, powershell):
         with tempfile.TemporaryDirectory(prefix='autoloot-stop-test-') as folder:
             root = Path(folder)
-            script = root / 'Arreter-AutoLoot.ps1'
-            shutil.copy2(ROOT / script.name, script)
+            (root / 'tools').mkdir()
+            script = root / 'tools/manage.ps1'
+            shutil.copy2(ROOT / 'tools/manage.ps1', script)
             host_code = '''
 import json, os, sys, time
 from datetime import datetime, timezone
@@ -57,11 +58,11 @@ while time.monotonic() < deadline:
                         self.fail('Owned host did not publish its status')
                     time.sleep(0.01)
                 result = subprocess.run(
-                    [powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)],
+                    [powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script), '-Action', 'Pause'],
                     capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIsNotNone(child.poll(), 'Stop returned while the host was still draining')
-                self.assertIn('AutoLoot arrete', result.stdout)
+                self.assertIn('AutoLoot paused', result.stdout)
             finally:
                 if child.poll() is None:
                     child.terminate()

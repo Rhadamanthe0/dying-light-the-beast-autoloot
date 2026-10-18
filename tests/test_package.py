@@ -28,15 +28,13 @@ class PackageTests(unittest.TestCase):
                 for module in imports:
                     with self.subTest(file=name,module=module):self.assertIn(module,available)
     def test_windows_entrypoints_refer_to_packaged_scripts(self):
-        for name in ('Installer','Lancer','Arreter','Verifier','Desinstaller'):
-            gui=ROOT/(name+'-AutoLoot.vbs');ps=ROOT/(name+'-AutoLoot.ps1')
-            self.assertTrue(gui.exists());self.assertTrue(ps.exists())
-            self.assertIn('AutoLoot-Entry.ps1',gui.read_text())
+        for name in ('Install','Pause','Resume','Uninstall'):
+            gui=ROOT/(name+'-AutoLoot.vbs')
+            self.assertTrue(gui.exists())
+            self.assertIn('tools\\manage.ps1',gui.read_text())
             self.assertIn('-Action '+name,gui.read_text())
             self.assertIn('shell.Run(command, 0, True)',gui.read_text())
-        self.assertTrue((ROOT/'AutoLoot-Entry.ps1').exists())
-        self.assertTrue((ROOT/'AutoLoot-Common.ps1').exists())
-        launcher=(ROOT/'Lancer-AutoLoot.ps1').read_text()
+        launcher=(ROOT/'tools/manage.ps1').read_text()
         self.assertIn('autoloot_watch.py',launcher)
         self.assertNotIn('autoloot_corpses.py',launcher)
         self.assertIn('.venv\\Scripts\\pythonw.exe',launcher)

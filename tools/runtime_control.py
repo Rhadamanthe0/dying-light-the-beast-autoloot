@@ -36,7 +36,7 @@ class SingleInstance:
         if not handle:raise ctypes.WinError(ctypes.get_last_error())
         if ctypes.get_last_error()==183:
             kernel.CloseHandle(handle)
-            raise AlreadyRunning('AutoLoot est deja actif dans cette session Windows.')
+            raise AlreadyRunning('AutoLoot is already running in this Windows session.')
         self.kernel=kernel;self.handle=handle
         return self
     def __exit__(self,*ignored):

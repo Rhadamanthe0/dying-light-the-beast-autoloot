@@ -1,7 +1,5 @@
 """Read-only PE inspection. Never opens a game process or changes game files."""
-import argparse
 import bisect
-import json
 from pathlib import Path
 import re
 import struct
@@ -41,21 +39,6 @@ class Image:
         off = self.offset(rva)
         return [f'{i.address-self.base:08x}: {i.mnemonic} {i.op_str}' for i in self.cs.disasm(self.data[off:off+size], self.base+rva)]
 
-    def exports(self):
-        # pefile's default limits truncate this game's 45,764 engine exports.
-        data = self.pe.get_memory_mapped_image()
-        directory = self.pe.OPTIONAL_HEADER.DATA_DIRECTORY[0].VirtualAddress
-        if not directory:
-            return []
-        fields = struct.unpack_from('<IIHHIIIIIII', data, directory)
-        count, names, ordinals, functions = fields[7], fields[9], fields[10], fields[8]
-        result = []
-        for i in range(count):
-            name_rva = struct.unpack_from('<I', data, names+4*i)[0]
-            ordinal = struct.unpack_from('<H', data, ordinals+2*i)[0]
-            rva = struct.unpack_from('<I', data, functions+4*ordinal)[0]
-            result.append({'rva': hex(rva), 'name': data[name_rva:data.find(b'\0', name_rva)].decode(errors='replace')})
-        return result
 
     def vtables(self, cls):
         tag = ('.?AV'+cls+'@@').encode()+b'\0'
@@ -83,41 +66,3 @@ class Image:
                     funcs.append(hex(rr))
                 if funcs: result.append({'class':cls,'subobject_offset':suboff,'vtable_rva':hex(self.rva(vf)),'scan_limit_reached':len(funcs)==limit,'functions':funcs})
         return result
-
-    def xrefs(self, text):
-        targets=[]
-        for m in re.finditer(re.escape(text.encode()+b'\0'),self.data):targets.append(self.rva(m.start()))
-        refs=[]
-        for s in self.pe.sections:
-            if not s.Characteristics & 0x20000000:continue
-            buf=s.get_data()
-            for m in re.finditer(rb'[\x48\x4c]\x8d[\x05\x0d\x15\x1d\x25\x2d\x35\x3d]',buf):
-                pos=m.start()
-                if pos+7>len(buf):continue
-                at=s.VirtualAddress+pos
-                dest=at+7+struct.unpack_from('<i',buf,pos+3)[0]
-                if dest in targets:
-                    f=self.function(at)
-                    refs.append({'instruction':hex(at),'target':hex(dest),'function':hex(f[0]) if f else None})
-        return {'text':text,'targets':[hex(x) for x in targets],'xrefs':refs}
-
-def main():
-    ap=argparse.ArgumentParser()
-    ap.add_argument('--dll',default='gamedll_ph_x64_rwdi.dll')
-    ap.add_argument('--class-name',action='append',default=[])
-    ap.add_argument('--xref',action='append',default=[])
-    ap.add_argument('--disasm')
-    ap.add_argument('--size',type=int,default=400)
-    ap.add_argument('--output',type=Path)
-    ap.add_argument('--exports',action='store_true')
-    ap.add_argument('--quiet',action='store_true')
-    args=ap.parse_args()
-    img=Image(GAME/'ph_ft/work/bin/x64'/args.dll)
-    result={'file':str(img.path),'image_base':hex(img.base),'vtables':[v for c in args.class_name for v in img.vtables(c)],'xrefs':[img.xrefs(t) for t in args.xref]}
-    if args.disasm:result['disassembly']=img.disasm(int(args.disasm,0),args.size)
-    if args.exports:result['exports']=img.exports()
-    data=json.dumps(result,indent=2)
-    if args.output:args.output.parent.mkdir(exist_ok=True,parents=True);args.output.write_text(data,encoding='utf8')
-    if not args.quiet:print(data)
-
-if __name__=='__main__':main()

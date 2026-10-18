@@ -196,7 +196,7 @@ class WatchTests(unittest.TestCase):
 
     def test_game_pid_reuse_refuses_start(self):
         self.backend.identities[10] = 'other-birth'
-        with self.assertRaisesRegex(ValueError, 'Identité du jeu'):
+        with self.assertRaisesRegex(ValueError, 'Game identity changed'):
             self.watcher.step()
         self.assertFalse(self.backend.spawns)
 
