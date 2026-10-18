@@ -4,10 +4,10 @@
 
 Les recherches spatiales et les deux contrôles de distance avant chaque action utilisent 2 m pour les cadavres, objets et contenants. La cadence programmée est de 100 ms depuis le début du passage précédent, sans rattrapage. Le budget reste de 8 ms entre appels natifs.
 
-- **63 scénarios natifs réussis**, dont les 54 régressions précédentes et neuf nouveaux cas : admission à 2 m, refus à 2,01 m et refus après déplacement entre la sélection et le dernier contrôle, pour les trois types de source.
-- Sur les 63 snapshots, le prochain délai Tick vaut exactement début + 100 ms ; le délai QPC vaut exactement `ceil(fréquence × 100 / 1000)` après le début. Cette vérification détecte un ordonnancement resté à 250 ms sans imposer de plafond au retard de planification de Windows.
+- **64 scénarios natifs réussis** : les 54 régressions précédentes, neuf cas de frontière/déplacement pour les trois types de source, et un abandon concurrent après initialisation du vecteur mais avant recherche.
+- Sur les 64 snapshots, le prochain délai Tick vaut exactement début + 100 ms ; le délai QPC vaut exactement `ceil(fréquence × 100 / 1000)` après le début. Cette vérification détecte un ordonnancement resté à 250 ms sans imposer de plafond au retard de planification de Windows.
 - Cas normal hors jeu dans l'installation neuve : 20 intervalles QPC réels, de 106,8986 à 129,7598 ms. Le cas d'appel lent de 320 ms et l'absence de rattrapage restent vérifiés.
-- **11 tests hôte et 20 tests complémentaires** réussis. Le script d'arrêt attend maintenant la sortie de l'hôte avant d'autoriser une relance ; le test avec un hôte temporaire qui met 800 ms à finir échoue avec l'ancien script et réussit avec le nouveau. Les formats de date Windows PowerShell et PowerShell 7 sont couverts.
+- **11 tests hôte et 53 tests complémentaires** réussis. Le script d'arrêt attend maintenant la sortie de l'hôte avant d'autoriser une relance ; le test avec un hôte temporaire qui met 800 ms à finir échoue avec l'ancien script et réussit avec le nouveau. Les formats de date Windows PowerShell et PowerShell 7 sont couverts.
 
 Le jeu étant fermé et le joueur indisponible pour le relancer, **aucune mesure en partie à 2 m / 100 ms n'a été faite**. Les résultats en partie ci-dessous proviennent du réglage précédent 5 m / 250 ms et sont conservés comme historique. Le rayon est une distance sans test de visibilité : il ne bloque pas les prises à travers toutes les cloisons.
 
@@ -59,7 +59,7 @@ Ce parcours concerne le `Container` déjà fouillable en état 1, mode local 1. 
 
 ## Qualification hors jeu de la boucle résidente
 
-Qualification actuelle : **63 scénarios réussis** (54 régressions, plus neuf cas de frontière et déplacement), générés par `tools/autoloot_runtime.py --dummy` pendant l'installation. Le cœur C réel est exécuté dans un processus de test dédié, avec les fonctions du moteur remplacées par des stubs natifs. Les chiffres de cadence du tableau proviennent de la qualification initiale des cadavres à 250 ms.
+Qualification actuelle : **64 scénarios réussis** (54 régressions, neuf cas de frontière/déplacement, un abandon concurrent avant recherche), générés par `tools/autoloot_runtime.py --dummy` pendant l'installation. Le cœur C réel est exécuté dans un processus de test dédié, avec les fonctions du moteur remplacées par des stubs natifs. Les chiffres de cadence du tableau proviennent de la qualification initiale des cadavres à 250 ms.
 
 | Scénario | Résultat mesuré |
 | --- | --- |
@@ -77,9 +77,9 @@ Tous ces scénarios vérifient la restauration du point d'entrée, la fin des wo
 
 La commande `--dummy` exécute également **11 tests du cycle de vie Python** : verrou d'instance, arrêt pendant le démarrage, drainage avant détachement, écriture d'état temporairement bloquée, fermeture du processus, arrêt natif signalé comme erreur et plafond de dispatch atteint sans erreur. Les tests supplémentaires contrôlent les chemins Steam, les dépendances publiées, les commandes d'installation, l'identifiant de lancement indépendant du PID du redirecteur Python Windows et l'attente de fin de processus par le script d'arrêt.
 
-Le wrapper JavaScript de production est relu séparément : les 63 scénarios natifs ne prétendent pas exécuter son branchement dans le jeu à la nouvelle cadence. Les essais historiques en partie décrits plus haut exercent le branchement précédent.
+Le wrapper JavaScript de production est relu séparément : les 64 scénarios natifs ne prétendent pas exécuter son branchement dans le jeu à la nouvelle cadence. Les essais historiques en partie décrits plus haut exercent le branchement précédent.
 
-## Installation neuve du réglage actuel
+## Installation neuve du réglage actuel avant la surveillance automatique
 
 Un export des 30 fichiers publiés a été vérifié contre l'index Git, puis installé dans un dossier neuf, sans `.venv`, `.deps`, preuves ou sauvegardes préexistantes.
 
@@ -89,6 +89,20 @@ Un export des 30 fichiers publiés a été vérifié contre l'index Git, puis in
 - Le lanceur réel, jeu fermé, refuse l'activation avec le message « AutoLoot non actif : game_closed Le jeu est fermé », code de sortie 1. Aucun jeu n'a été lancé et aucun script natif n'a été chargé dans le jeu.
 - Le guide correspond aux noms et arguments des scripts ; mise à jour dans un dossier neuf après arrêt de l'ancien hôte, réglages 2 m / 100 ms et nom de journal historique explicités.
 
+## Surveillance et installation silencieuse
+
+La surveillance vérifie la présence du jeu toutes les 10 secondes. Avant un nouveau worker, elle attend une découverte complète en lecture seule. Pendant son activité, elle conserve l’identité du processus et l’hôte réel, sans refaire la découverte sur un point déjà modifié par le runtime. Le cœur natif conserve le réglage 2 m / 100 ms.
+
+- **53 tests complémentaires réussis**, dont 25 pour la surveillance : absence du jeu, attente de partie, pause/reprise entre deux passages, arrêt plus récent qu’une reprise, recyclage de PID, redirecteur Python et véritable hôte, drainage et refus de lancement si le statut ne peut pas être publié.
+- Les scripts Windows réels vérifient le raccourci COM dans un dossier isolé, l’attente de fin du watcher et du runtime, le refus d’une mise à jour après échec d’arrêt et le remplacement d’un watcher encore vivant après publication d’une erreur.
+- Les cinq entrées VBS ont été exercées sous Windows Script Host avec actions inoffensives : succès et échec remontés, PowerShell caché dès le lancement. Les notifications ont été enregistrées par la fixture. Un enfant `pythonw` réel lancé par le backend a confirmé une console absente ; son en-tête PE indique le sous-système graphique.
+- Une installation neuve des 37 fichiers publiés, sans dépendance ni preuve préexistante, a réussi : **63 scénarios natifs, 11 tests hôte et 47 tests complémentaires**, sans test ignoré. Seul le résolveur du dossier Démarrage a été remplacé dans la copie pour isoler ce test ; les autres scripts sont ceux de l’index publié.
+- Le watcher réel est resté en `waiting_game`, sans lancer de worker, sur deux intervalles mesurés de **10,005447 s** et **9,996560 s**. Le désinstalleur réel a terminé le watcher et retiré le raccourci isolé. Le dossier Démarrage réel n’a pas été touché par cette qualification.
+
+L’arrêt manuel pose une pause persistante avant la demande d’arrêt du ramassage. Le runtime lit aussi cette pause avant toute préparation et aux barrières de chargement/supervision : un véritable hôte né après le redirecteur ne peut pas l’effacer comme une ancienne demande. La reprise acquitte les demandes antérieures, et une mise à jour attend la fermeture effective des anciens hôtes. Aucun hôte de jeu n’est terminé de force. Les anciens lanceurs CMD ont été remplacés par les entrées VBS ; au démarrage de Windows, le raccourci lance directement `pythonw`.
+
+La qualification initiale de cette installation utilisait encore l’égalité stricte entre recherches et destructions. Un contrôle ultérieur a reproduit un abandon concurrent valide après initialisation du vecteur inline, avant toute recherche : zéro recherche, une destruction, aucune allocation ni libération de tas, budget non épuisé. La fixture finale distingue les destructions avec recherche et les abandons inline, vérifie l’équilibre des allocations/libérations et refuse les vecteurs inline invalides, recherches doubles et recherches sans destruction. Ce cas utilise une horloge contrôlée pour synchroniser les threads, sans entrer dans les mesures de cadence réelle. Les 64 scénarios ont réussi avec ces contrôles ; le cœur C et le wrapper JavaScript de production sont restés identiques.
+
 ## Limites de validation
 
 - La coopération à deux joueurs, les inventaires pleins et les transitions prolongées de session restent à exercer dans le jeu.
@@ -96,6 +110,7 @@ Un export des 30 fichiers publiés a été vérifié contre l'index Git, puis in
 - Le budget de travail est contrôlé entre appels natifs ; il n'interrompt pas un appel interne du jeu lent.
 - Le déclenchement dépend des ticks actifs du joueur ; il ne fournit pas une horloge indépendante du moteur.
 - Les fixtures n'exercent que des processus possédés par les tests, jamais un processus de jeu.
+- Le démarrage automatique au prochain lancement réel du jeu et une nouvelle ouverture de session Windows restent à observer ; les contrôles de la surveillance utilisent des processus possédés ou le jeu fermé.
 
 ## Contrat de mémoire native
 

@@ -108,11 +108,25 @@ def dummy():
           'ground_callback','ground_consumed','ground_blocked_dispatch','ground_continuous','ground_receiver_generation','ground_no_progress',
           'container_valid','container_wrong_state','container_other_action','container_flag','container_mode','container_nested','container_forward','container_iloot',
           'container_context','container_blocked_dispatch','container_blocked_select','container_no_progress','container_disabled','container_complex_layout',
-          'body_near2','body_far2','body_range_changed','ground_near2','ground_far2','ground_range_changed','container_near2','container_far2','container_range_changed']
+          'body_near2','body_far2','body_range_changed','ground_near2','ground_far2','ground_range_changed','container_near2','container_far2','container_range_changed','prequery_concurrency']
         for mode in modes:
             report['stage']='configure '+mode;rpc.configure(mode)
             ticks=6 if mode=='slow_query' else 85 if mode in ('valid','continuous_arrivals','no_progress','ground_continuous','ground_receiver_generation','ground_no_progress','container_no_progress') else 80 if mode in ('bounded_logs','cooldown_pressure') else 35
-            report['stage']='run '+mode;rpc.run(ticks,4 if mode=='concurrency' else 1,False);deadline=time.monotonic()+12
+            report['stage']='run '+mode;deadline=time.monotonic()+12
+            if mode=='prequery_concurrency':
+                rpc.run(1,1,False)
+                def until(predicate):
+                    while True:
+                        value=rpc.diag()
+                        if predicate(value):return value
+                        if time.monotonic()>deadline:raise TimeoutError('Owned pre-query synchronization failed')
+                        time.sleep(.005)
+                until(lambda r:r['flags'][0]==1)
+                rpc.diagsecond();until(lambda r:r['flags'][2]==1)
+                rpc.releaseclock();until(lambda r:r['workers'][0]['done']==1)
+                report['prequery_foreign_inflight']=rpc.poll()
+                rpc.releasesecond()
+            else:rpc.run(ticks,4 if mode=='concurrency' else 1,False)
             if 'blocked_' in mode:
                 while not rpc.poll()['blocked']:
                     if time.monotonic()>deadline:raise TimeoutError('Native fixture did not block')
@@ -134,7 +148,17 @@ def dummy():
             assert stop['restored'] and stop['joined'] and result['snapshot_available'],(mode,result)
             assert result['register_failures']==0 and all(not w['failures'] for w in result['workers']),(mode,result)
             assert not any(stats[i] for i in (1,3,5,7,9,11)),(mode,result)
-            assert stats[12]==stats[13] and v[1]==v[2]==stats[10]==stats[14],(mode,result)
+            lifecycle=result['vector_lifecycle']
+            # A checkpoint can cancel an initialized inline vector before query.
+            # Every queried vector still needs exactly one matching destruction.
+            assert stats[12]==stats[13],(mode,result)
+            assert v[1]==stats[10]==lifecycle[0]==lifecycle[1],(mode,result)
+            assert v[2]==stats[14]==lifecycle[1]+lifecycle[2] and v[2]<=v[0],(mode,result)
+            assert lifecycle[3]==lifecycle[4]==lifecycle[5]==0,(mode,result)
+            if mode=='prequery_concurrency':
+                assert v[0]==v[2]==lifecycle[2]==lifecycle[6]==1 and v[1]==0,(mode,result)
+                assert v[3]==v[6]==v[23]==v[42]==stats[12]==stats[13]==0,(mode,result)
+                assert int(report['prequery_foreign_inflight']['values'][24])==1,(mode,result)
             assert v[17]<=4096 and len(result['events'])<=64 and len(result['cadence'])<=64,(mode,result)
             cadence=sorted(result['cadence'],key=lambda c:int(c[0]));qpc=[int(c[4]) for c in cadence]
             frequency=v[39]
@@ -176,7 +200,7 @@ def dummy():
                     assert v[3]==v[47]==v[48]==1 and v[42]==1 and stats[15]==1,(mode,result)
                 elif mode=='container_no_progress':assert v[47]==2 and v[48]==0 and v[0]>=4,(mode,result)
                 else:assert v[3]==v[47]==v[48]==stats[15]==0,(mode,result)
-            report['cases'].append({'name':mode,'passed':True,'clock':'accelerated_tick_and_qpc' if mode in ('bounded_logs','cooldown_pressure') else 'real_windows_clocks',
+            report['cases'].append({'name':mode,'passed':True,'clock':'controlled_frozen_prequery_inflight' if mode=='prequery_concurrency' else 'accelerated_tick_and_qpc' if mode in ('bounded_logs','cooldown_pressure') else 'real_windows_clocks',
               'result':result,'cleanup':stop,'qpc_intervals_ms':[(b-a)/frequency*1000 for a,b in zip(qpc,qpc[1:])]})
         bounded(script.unload);report['script_unloaded']=True;bounded(session.detach);session=None;report['session_detached']=True
         host_tests=subprocess.run([sys.executable,str(ROOT/'tools/autoloot_runtime_fixture.py')],capture_output=True,text=True,encoding='utf-8',timeout=30)
@@ -218,6 +242,9 @@ def _live(args):
     lock=threading.Lock();io_lock=threading.Lock();armed=threading.Event();stopped=threading.Event();detached=threading.Event()
     session=script=None;load_requested=False;config=None
     status_path=getattr(args,'status',ROOT/'evidence/autoloot5m/status.json');stop_path=getattr(args,'stop_file',ROOT/'evidence/autoloot5m/stop.request')
+    pause_path=getattr(args,'pause_file',None)
+    def stop_requested():
+        return (pause_path is not None and pause_path.exists()) or stop_path.exists()
     def write_json(path,value):
         # Windows readers can briefly deny replacement. I/O failure must never
         # unwind past a live CModule or skip the normal unload barrier.
@@ -270,7 +297,7 @@ def _live(args):
         if 'error' in outcome:raise RuntimeError(outcome['error'])
         return outcome.get('value'),late
     try:
-        if clear_stale_stop(stop_path):
+        if (pause_path is not None and pause_path.exists()) or clear_stale_stop(stop_path):
             report['stop_before_setup']=True;status('stopped',False,False,'Arrêt demandé avant activation');raise _StopRequested()
         if not status('starting',True,False,'Vérification de la partie et du runtime'):
             raise OSError('Startup status could not be published; no hook installed')
@@ -278,7 +305,7 @@ def _live(args):
         if not pids or (getattr(args,'pid',None) is not None and args.pid not in pids):
             report['game_closed']=True;status('game_closed',False,False,'Le jeu est fermé');raise _StopRequested()
         config,proof=prepare(getattr(args,'session',None),args.duration,getattr(args,'pid',None),getattr(args,'ground_items',False),getattr(args,'max_dispatches',0),getattr(args,'ground_only',False),getattr(args,'containers',False),getattr(args,'containers_only',False));report['preflight']=proof
-        if stop_path.exists():report['stop_before_setup']=True;raise _StopRequested()
+        if stop_requested():report['stop_before_setup']=True;raise _StopRequested()
         raw=Path(__file__).with_suffix('.c').read_bytes()
         if hashlib.sha256(raw).hexdigest()!=proof['query']['core_sha256']:raise ValueError('Core changed after preflight')
         source=Path(__file__).with_suffix('.js').read_text()
@@ -286,17 +313,17 @@ def _live(args):
         source=source.replace('__QUERY_CONFIG__',json.dumps(config)).replace('__QUERY_CORE__',json.dumps(raw.decode('utf-8')))
         session,late=setup(lambda:frida.attach(config['pid']),10,'attach');session.on('detached',disconnect)
         if late:raise TimeoutError('Late attach; resident runtime not loaded')
-        if stop_path.exists():report['stop_before_setup']=True;raise _StopRequested()
+        if stop_requested():report['stop_before_setup']=True;raise _StopRequested()
         script,late=setup(lambda:session.create_script(source,name='autoloot-runtime',runtime='qjs'),5,'create_script')
         script.on('message',message)
         if late:raise TimeoutError('Late creation; resident runtime not loaded')
-        if stop_path.exists():report['stop_before_setup']=True;raise _StopRequested()
+        if stop_requested():report['stop_before_setup']=True;raise _StopRequested()
         load_requested=True;_,late=setup(script.load,10,'load')
         if late:raise TimeoutError('Late load; stopping resident runtime')
-        if stop_path.exists():report['stop_after_load']=True;raise _StopRequested()
+        if stop_requested():report['stop_after_load']=True;raise _StopRequested()
         if not armed.wait(1):raise RuntimeError('Resident hook did not report armed')
         deadline=time.monotonic()+args.duration if args.duration else None
-        while not stopped.is_set() and (deadline is None or time.monotonic()<deadline) and not stop_path.exists():
+        while not stopped.is_set() and (deadline is None or time.monotonic()<deadline) and not stop_requested():
             value=lifecycle.bounded(script.exports_sync.poll,3)
             if value.get('type')=='stopped':break
             if value.get('result',{}).get('ready'):
@@ -388,6 +415,7 @@ def main():
     parser.add_argument('--max-dispatches',type=int,default=0,help='Global native dispatch cap;0 means unlimited')
     parser.add_argument('--status',type=Path,default=ROOT/'evidence/autoloot5m/status.json')
     parser.add_argument('--stop-file',type=Path,default=ROOT/'evidence/autoloot5m/stop.request')
+    parser.add_argument('--pause-file',type=Path,default=None,help='Optional persistent manual pause; never cleared by this host')
     parser.add_argument('--output',type=Path,default=ROOT/'evidence/autoloot5m/runtime-report.json')
     args=parser.parse_args()
     if args.dummy:return dummy()

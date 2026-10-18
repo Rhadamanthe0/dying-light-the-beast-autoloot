@@ -1,6 +1,8 @@
+param([string]$Root = $PSScriptRoot)
 $ErrorActionPreference = 'Stop'
-$taskEvidence = Join-Path $PSScriptRoot 'evidence\autoloot5m'
+$taskEvidence = Join-Path $Root 'evidence\autoloot5m'
 New-Item -ItemType Directory -Path $taskEvidence -Force | Out-Null
+Set-Content -LiteralPath (Join-Path $taskEvidence 'watch.pause') -Value 'user pause' -Encoding utf8
 $taskStatusPath = Join-Path $taskEvidence 'status.json'
 $taskHost = $null
 try {

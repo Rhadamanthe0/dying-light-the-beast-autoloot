@@ -109,6 +109,82 @@ class RuntimeHostTests(unittest.TestCase):
         self.runtime.prepare.assert_not_called()
         self.frida.attach.assert_not_called()
 
+    def test_persistent_pause_before_host_refuses_setup_without_clearing_it(self):
+        self.args.pause_file = self.args.status.with_name('watch.pause')
+        self.args.pause_file.write_text('paused before host birth')
+        self.args.stop_file.write_text('old request')
+        def clear_old_stop(path):
+            path.unlink()
+            return False
+        self.control.clear_stale_stop.side_effect = clear_old_stop
+        code, status, report = self.run_host()
+        self.assertEqual(code, 0)
+        self.assertEqual(status['phase'], 'stopped')
+        self.control.clear_stale_stop.assert_not_called()
+        self.discovery.api_setup.assert_not_called()
+        self.frida.attach.assert_not_called()
+        self.assertEqual(self.args.pause_file.read_text(), 'paused before host birth')
+
+    def pause_transport(self, phase):
+        self.args.pause_file = self.args.status.with_name('watch.pause')
+        trace, callbacks = [], {}
+        def pause():
+            self.args.pause_file.write_text('persistent user pause')
+        def load():
+            trace.append('load')
+            if phase == 'load':pause()
+            callbacks['message']({'type': 'send', 'payload': {'type': 'armed'}}, None)
+        def create(*args, **kwargs):
+            trace.append('create')
+            if phase == 'create':pause()
+            return script
+        def active_poll():
+            trace.append('poll')
+            self.args.stop_file.write_text('end isolated old-version test')
+            return {'type': 'poll', 'result': {'ready': False}}
+        def stop():
+            trace.append('stop')
+            return {'type': 'stopped', 'restoration_verified': True, 'detach_done': True,
+                    'errors': [], 'cleanup_errors': [], 'result': {}}
+        script = SimpleNamespace(on=Mock(side_effect=lambda name, callback: callbacks.__setitem__(name, callback)),
+                load=Mock(side_effect=load), unload=Mock(side_effect=lambda: trace.append('unload')),
+                exports_sync=SimpleNamespace(poll=Mock(side_effect=active_poll), stop=Mock(side_effect=stop)))
+        session = SimpleNamespace(on=Mock(), create_script=Mock(side_effect=create),
+                                  detach=Mock(side_effect=lambda: trace.append('detach')))
+        self.frida.attach.side_effect = None
+        self.frida.attach.return_value = session
+        self.discovery.process_ids.return_value = [42]
+        self.runtime.prepare.side_effect = None
+        self.runtime.prepare.return_value = ({'pid': 42}, {'query': {
+            'core_sha256': hashlib.sha256(SOURCE.with_suffix('.c').read_bytes()).hexdigest()}})
+        return script, trace
+
+    def test_pause_during_creation_never_loads(self):
+        script, trace = self.pause_transport('create')
+        code, status, report = self.run_host()
+        self.assertEqual(code, 0)
+        script.load.assert_not_called()
+        self.assertEqual(trace, ['create', 'detach'])
+        self.assertTrue(report['cleanup']['no_script_execution'])
+        self.assertTrue(self.args.pause_file.exists())
+
+    def test_pause_during_load_uses_normal_unload_barrier(self):
+        script, trace = self.pause_transport('load')
+        code, status, report = self.run_host()
+        self.assertEqual(code, 0)
+        script.exports_sync.poll.assert_not_called()
+        self.assertEqual(trace, ['create', 'load', 'stop', 'unload', 'detach'])
+        self.assertTrue(report['cleanup']['script_unloaded'])
+        self.assertTrue(report['cleanup']['session_detached'])
+        self.assertTrue(self.args.pause_file.exists())
+
+    def test_cli_accepts_optional_persistent_pause_path(self):
+        pause = self.args.status.with_name('watch.pause')
+        with patch.object(self.runtime.sys, 'argv', ['autoloot_runtime.py', '--live', '--pause-file', str(pause)]), \
+                patch.object(self.runtime, 'live', return_value=0) as live:
+            self.assertEqual(self.runtime.main(), 0)
+        self.assertEqual(live.call_args.args[0].pause_file, pause)
+
     def test_process_terminated_during_poll_skips_dead_process_cleanup(self):
         callbacks = {}
         script = SimpleNamespace()

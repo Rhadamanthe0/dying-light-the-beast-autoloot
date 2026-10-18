@@ -1,41 +1,41 @@
 $ErrorActionPreference = 'Stop'
-try {
-$taskRoot = $PSScriptRoot
-$taskPython = Join-Path $taskRoot '.venv\Scripts\python.exe'
-if (-not (Test-Path -LiteralPath $taskPython -PathType Leaf)) { throw 'Executer Installer-AutoLoot.cmd une premiere fois.' }
-$taskEvidence = Join-Path $taskRoot 'evidence\autoloot5m'
+. (Join-Path $PSScriptRoot 'AutoLoot-Common.ps1')
+$taskPython = Join-Path $PSScriptRoot '.venv\Scripts\pythonw.exe'
+if (-not (Test-Path -LiteralPath $taskPython -PathType Leaf)) { throw 'Executer Installer-AutoLoot.vbs en premier.' }
+$taskEvidence = Join-Path $PSScriptRoot 'evidence\autoloot5m'
 New-Item -ItemType Directory -Path $taskEvidence -Force | Out-Null
-$taskScript = Join-Path $taskRoot 'tools\autoloot_runtime.py'
-$taskStamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
-$taskLaunchToken = [guid]::NewGuid().ToString('N')
-$taskChild = Start-Process -FilePath $taskPython -ArgumentList @('-u', ('"' + $taskScript + '"'), '--live', '--ground-items', '--containers', '--launch-token', $taskLaunchToken) -WorkingDirectory $taskRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $taskEvidence ($taskStamp + '-stdout.log')) -RedirectStandardError (Join-Path $taskEvidence ($taskStamp + '-stderr.log'))
-$taskStatusPath = Join-Path $taskEvidence 'status.json'
-$taskDeadline = [DateTime]::UtcNow.AddSeconds(30)
-while ([DateTime]::UtcNow -lt $taskDeadline) {
+$taskWatcher = Get-AutoLootWatcher $PSScriptRoot
+$taskWatcherClosing = Test-Path -LiteralPath (Join-Path $taskEvidence 'watch.stop')
+if ($taskWatcher) {
+    try {
+        $taskPreviousState = Get-Content -LiteralPath (Join-Path $taskEvidence 'watch-status.json') -Raw | ConvertFrom-Json
+        if ($taskPreviousState.host_pid -eq $taskWatcher.Id -and $taskPreviousState.running -eq $false) { $taskWatcherClosing = $true }
+    } catch { }
+}
+if ($taskWatcher -and $taskWatcherClosing) {
+    if (-not $taskWatcher.WaitForExit(30000)) { throw 'La surveillance termine encore son arret.' }
+    $taskWatcher = $null
+}
+Set-Content -LiteralPath (Join-Path $taskEvidence 'watch.resume') -Value ([guid]::NewGuid().ToString('N')) -Encoding utf8
+Remove-Item -LiteralPath (Join-Path $taskEvidence 'watch.pause') -Force -ErrorAction SilentlyContinue
+if ($taskWatcher) { Write-Host 'Surveillance automatique reprise.'; return }
+Remove-Item -LiteralPath (Join-Path $taskEvidence 'watch.stop') -Force -ErrorAction SilentlyContinue
+$taskToken = [guid]::NewGuid().ToString('N')
+$taskArguments = '"' + (Join-Path $PSScriptRoot 'tools\autoloot_watch.py') + '" --live --launch-token ' + $taskToken
+$taskChild = Start-Process -FilePath $taskPython -ArgumentList $taskArguments -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -PassThru
+$taskDeadline = [DateTime]::UtcNow.AddSeconds(20)
+do {
     $taskState = $null
-    try { if (Test-Path -LiteralPath $taskStatusPath) { $taskState = Get-Content -LiteralPath $taskStatusPath -Raw | ConvertFrom-Json } } catch { }
-    if ($taskState -and $taskState.launch_token -eq $taskLaunchToken) {
-        if ($taskState.running -and $taskState.phase -in @('active', 'running')) {
-            Write-Host 'AutoLoot actif : cadavres, objets et contenants compatibles, rayon 2 m, passage toutes les 100 ms.'
-            Write-Host 'Pour arreter : Arreter-AutoLoot.cmd.'
-            exit 0
-        }
-        if ($taskState.phase -in @('error', 'game_closed', 'stopped')) {
-            throw ('AutoLoot non actif : ' + $taskState.phase + ' ' + $taskState.message)
-        }
+    try {
+        $taskState = Get-Content -LiteralPath (Join-Path $taskEvidence 'watch-status.json') -Raw | ConvertFrom-Json
+    } catch { }
+    if ($taskState -and $taskState.launch_token -eq $taskToken -and $taskState.phase -eq 'error') {
+        throw ('Echec de la surveillance : ' + $taskState.last_error)
     }
-    $taskChild.Refresh()
-    if ($taskChild.HasExited) {
-        if ($taskChild.ExitCode -eq 2 -and $taskState -and $taskState.running -and $taskState.launch_token -ne $taskLaunchToken) {
-            $taskExisting = Get-Process -Id $taskState.host_pid -ErrorAction SilentlyContinue
-            if ($taskExisting -and $taskExisting.ProcessName -like 'python*') { Write-Host 'Une instance AutoLoot est deja active.'; exit 0 }
-        }
-        throw ('Demarrage impossible. Voir ' + $taskEvidence + ' et charger une partie avant de relancer.')
+    if ($taskState -and $taskState.launch_token -eq $taskToken -and $taskState.running -and $taskState.phase -ne 'starting') {
+        Write-Host 'Surveillance active : detection du jeu toutes les 10 secondes, ramassage a 2 m toutes les 100 ms.'
+        return
     }
-    Start-Sleep -Milliseconds 100
-}
-throw ('Le demarrage reste en attente. Consulter ' + $taskStatusPath + '. Aucun processus force a s arreter.')
-} catch {
-    Write-Host ('AutoLoot : ' + $_.Exception.Message)
-    exit 1
-}
+    Start-Sleep -Milliseconds 200
+} while ([DateTime]::UtcNow -lt $taskDeadline)
+throw 'La surveillance n a pas confirme son demarrage. Consulter evidence\autoloot5m\watch-status.json et watch.log.'

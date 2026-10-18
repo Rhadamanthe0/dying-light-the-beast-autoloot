@@ -18,25 +18,22 @@ Aucun compilateur ni remplacement de fichier du jeu n’est nécessaire. Tout le
 ## Première installation
 
 1. Sur [GitHub](https://github.com/Rhadamanthe0/dying-light-the-beast-autoloot), choisir **Code → Download ZIP**, puis extraire entièrement l’archive dans un dossier accessible en écriture. Ne pas lancer les fichiers directement depuis le ZIP.
-2. Double-cliquer sur **Installer-AutoLoot.cmd**. Attendre « Installation et controles hors jeu termines ». Une fenêtre qui affiche une erreur ne confirme pas l’installation : corriger la cause indiquée avant de continuer.
-3. Lancer le jeu et **charger une partie**.
-4. Double-cliquer sur **Lancer-AutoLoot.cmd**. Attendre « AutoLoot actif », avec **2 m** et **100 ms**. Le chargement de la partie doit être terminé.
-5. Se déplacer normalement : les sources admissibles dans les 2 mètres sont récupérées automatiquement.
+2. Double-cliquer sur **Installer-AutoLoot.vbs**. L’installation reste silencieuse ; attendre le message de réussite. En cas d’erreur, le message indique le journal à consulter.
+3. Lancer le jeu et **charger une partie**. AutoLoot démarre automatiquement, avec une détection toutes les **10 secondes**. Se déplacer normalement : les sources admissibles dans les 2 mètres sont récupérées automatiquement.
 
-Le programme fonctionne en arrière-plan après ce message. Fermer le jeu l’arrête. Après chaque relance du jeu, utiliser de nouveau **Lancer-AutoLoot.cmd**.
+Rien à relancer manuellement : la surveillance démarre aussi à l’ouverture de Windows. Elle attend en arrière-plan quand le jeu est fermé ; le ramassage s’arrête avec le jeu. Le démarrage normal utilise directement **pythonw**, sans fenêtre de console. Garder le dossier installé à sa place : le raccourci de démarrage pointe vers lui.
 
 ## Arrêter et mettre à jour
 
-Pour arrêter, double-cliquer sur **Arreter-AutoLoot.cmd** et attendre **« AutoLoot arrete »**. Le programme termine d’abord l’appel du jeu éventuellement en cours. Si l’arrêt dépasse 30 secondes, le script le signale sans tuer Python : attendre sa fin avant de relancer.
+Pour suspendre le ramassage, double-cliquer sur **Arreter-AutoLoot.vbs**. La pause est conservée après fermeture du jeu et redémarrage de Windows. Pour reprendre le fonctionnement automatique, utiliser **Lancer-AutoLoot.vbs** une seule fois. L’arrêt attend la fin de l’appel du jeu éventuellement en cours ; un dépassement du délai est signalé sans tuer Python.
 
 Pour une mise à jour :
 
-1. Arrêter l’ancienne version **depuis son dossier**, comme indiqué ci-dessus. Si aucun hôte actif n’est identifié, le script l’indique ; ne pas confondre ce message avec une fin de drainage confirmée.
-2. Télécharger et extraire la nouvelle version dans un dossier neuf.
-3. Exécuter son **Installer-AutoLoot.cmd**, même si une ancienne version était déjà installée. Les contrôles doivent correspondre au code téléchargé.
-4. Charger une partie, puis exécuter le nouveau **Lancer-AutoLoot.cmd**.
+1. Télécharger et extraire la nouvelle version dans un dossier neuf.
+2. Exécuter son **Installer-AutoLoot.vbs** : il arrête l’installation automatique précédente, refait les contrôles puis remplace son raccourci de démarrage.
+3. Après le message de réussite, l’ancien dossier peut être supprimé. Pour une ancienne version à lancement manuel, l’arrêter d’abord avec son propre script d’arrêt.
 
-Pour désinstaller, arrêter AutoLoot puis supprimer son dossier. Aucun fichier du jeu n’a été remplacé.
+Pour désinstaller, exécuter **Desinstaller-AutoLoot.vbs** depuis le dossier actif, attendre la confirmation puis supprimer ce dossier. Cela arrête la surveillance et retire son raccourci du dossier Démarrage de Windows. Aucun fichier du jeu n’a été remplacé.
 
 ## Si le jeu est installé sur un autre disque
 
@@ -60,15 +57,17 @@ Les cadavres, composants et sacs ont été confirmés en partie avec l’ancien 
 
 | Situation | Action |
 | --- | --- |
-| Python ou dépendances introuvables | Installer Python 64 bits, puis refaire Installer-AutoLoot.cmd. |
+| Python ou dépendances introuvables | Installer Python 64 bits, puis refaire Installer-AutoLoot.vbs. |
 | Jeu introuvable ou partie non chargée | Charger une partie ; vérifier le chemin ci-dessus. |
 | Version du jeu non prise en charge | Conserver le refus ; ne pas retirer les contrôles de version. |
-| Une instance est déjà active | Utiliser Arreter-AutoLoot.cmd dans le dossier qui l’a lancée, attendre la fin, puis relancer. |
-| Contrôles hors jeu absents ou périmés après une mise à jour | Refaire Installer-AutoLoot.cmd dans le nouveau dossier. |
+| Une instance est déjà active | Ne pas lancer plusieurs dossiers. Installer la nouvelle version pour remplacer l’ancienne surveillance. |
+| Contrôles hors jeu absents ou périmés après une mise à jour | Refaire Installer-AutoLoot.vbs dans le nouveau dossier. |
 | Pas de butin | Vérifier la distance, le caractère fouillable et la place disponible. Un cadavre peut être vide ; certaines interactions restent exclues. |
-| Besoin de suspendre le mod | Utiliser Arreter-AutoLoot.cmd ; les ticks de tous les menus et états de pause ne sont pas qualifiés. |
+| Besoin de suspendre le mod | Utiliser Arreter-AutoLoot.vbs ; les ticks de tous les menus et états de pause ne sont pas qualifiés. |
+| Aucun démarrage automatique | Vérifier que le dossier installé existe encore, que Windows autorise son raccourci dans Démarrage, puis consulter `evidence/autoloot5m/watch-status.json`. |
+| Les fichiers VBS ne s’ouvrent pas | Windows Script Host doit être disponible. Sur un PC où il est désactivé par une politique système, cette installation silencieuse ne peut pas fonctionner. |
 
-Pour refaire les contrôles hors jeu sans lancer le mod, utiliser **Verifier-AutoLoot.cmd**. Cette vérification n’appelle aucune fonction du jeu.
+Pour refaire les contrôles hors jeu sans lancer le mod, utiliser **Verifier-AutoLoot.vbs**. Cette vérification n’appelle aucune fonction du jeu.
 
 Les journaux restent locaux dans `evidence/autoloot5m/`. Ce nom de dossier est historique : **le rayon actuel est bien de 2 m**. Utiliser le script d’arrêt avant de déplacer ou remplacer le dossier.
 

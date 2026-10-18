@@ -8,7 +8,7 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 RUNTIME_FILES=('autoloot_runtime.py','autoloot_runtime.c','autoloot_runtime.js',
                'autoloot_runtime_fixture.js','autoloot_runtime_fixture.py','discover_session.py','inspect_native.py',
-               'observe_runtime.py','game_paths.py','runtime_control.py')
+               'observe_runtime.py','game_paths.py','runtime_control.py','autoloot_watch.py')
 
 class PackageTests(unittest.TestCase):
     def test_runtime_inputs_present(self):
@@ -28,14 +28,18 @@ class PackageTests(unittest.TestCase):
                 for module in imports:
                     with self.subTest(file=name,module=module):self.assertIn(module,available)
     def test_windows_entrypoints_refer_to_packaged_scripts(self):
-        for name in ('Installer','Lancer','Arreter','Verifier'):
-            cmd=ROOT/(name+'-AutoLoot.cmd');ps=ROOT/(name+'-AutoLoot.ps1')
-            self.assertTrue(cmd.exists());self.assertTrue(ps.exists())
-            self.assertIn(ps.name,cmd.read_text())
+        for name in ('Installer','Lancer','Arreter','Verifier','Desinstaller'):
+            gui=ROOT/(name+'-AutoLoot.vbs');ps=ROOT/(name+'-AutoLoot.ps1')
+            self.assertTrue(gui.exists());self.assertTrue(ps.exists())
+            self.assertIn('AutoLoot-Entry.ps1',gui.read_text())
+            self.assertIn('-Action '+name,gui.read_text())
+            self.assertIn('shell.Run(command, 0, True)',gui.read_text())
+        self.assertTrue((ROOT/'AutoLoot-Entry.ps1').exists())
+        self.assertTrue((ROOT/'AutoLoot-Common.ps1').exists())
         launcher=(ROOT/'Lancer-AutoLoot.ps1').read_text()
-        self.assertIn('autoloot_runtime.py',launcher)
+        self.assertIn('autoloot_watch.py',launcher)
         self.assertNotIn('autoloot_corpses.py',launcher)
-        self.assertIn('.venv\\Scripts\\python.exe',launcher)
+        self.assertIn('.venv\\Scripts\\pythonw.exe',launcher)
     def test_no_local_user_paths_in_runtime_sources(self):
         for name in RUNTIME_FILES:
             path=ROOT/'tools'/name

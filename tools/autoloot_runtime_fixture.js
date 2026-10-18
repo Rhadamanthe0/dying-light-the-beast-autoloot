@@ -3,9 +3,10 @@ const pid=__OWNED_PID__,coreSource=__CORE_SOURCE__;
 if(Process.id!==pid||Frida.version!=='17.24.0'||Script.runtime!=='QJS'||Process.platform!=='windows'||Process.arch!=='x64')throw new Error('Owned fixture required');
 const kernel=Process.getModuleByName('kernel32.dll'),address=n=>kernel.getExportByName(n);
 const cfg=Memory.alloc(256),bindingCfg=Memory.alloc(256),runtimeConfig=Memory.alloc(128),state=Memory.alloc(32768),fixtureStats=Memory.alloc(128),controls=Memory.alloc(32),tickAddress=Memory.alloc(8);
+const diag=Memory.alloc(32),diagCounts=Memory.alloc(64),diagQpc=Memory.alloc(8);
 const fixtureSource=`
 #include <glib.h>
-extern guint64 cfg[32],runtime_config[16],stats[16];extern volatile gint controls[8];extern gpointer tick_address;
+extern guint64 cfg[32],runtime_config[16],stats[16],diag_counts[8],diag_qpc;extern volatile gint controls[8],diag[8];extern gpointer tick_address;
 extern void Sleep(guint);extern guint GetCurrentThreadId(void);extern guint64 GetTickCount64(void);extern gboolean QueryPerformanceCounter(gint64*);
 extern gpointer GetProcessHeap(void);extern gpointer HeapAlloc(gpointer,guint,gsize);extern gboolean HeapFree(gpointer,guint,gpointer);
 typedef guint64(*Tick)(gpointer,guint64,guint64);
@@ -13,7 +14,16 @@ typedef struct {gpointer player;guint count,pad;guint64 failures,done,thread_id;
 static gint load(volatile gint*p){return g_atomic_int_add(p,0);}
 static void block(gint point){if(load(controls)==point){g_atomic_int_add(controls+1,1);while(!load(controls+2))Sleep(1);}}
 guint64 clock_now(void){return GetTickCount64()+(guint64)load(controls+6);}
-gboolean clock_qpc(gint64*out){gboolean okay=QueryPerformanceCounter(out);*out+=(gint64)load(controls+6)*(gint64)runtime_config[10]/1000;return okay;}
+gboolean clock_qpc(gint64*out){gboolean okay=QueryPerformanceCounter(out);guint8*v=(gpointer)runtime_config[8];
+ if(load(diag+5)){*out=(gint64)diag_qpc;return okay;}
+ *out+=(gint64)load(controls+6)*(gint64)runtime_config[10]/1000;
+ /* Deterministic fixture only: checkpoint's QPC call follows vector initialization.
+  * Freeze this clock while a foreign native tick enters, excluding budget expiry. */
+ if(load(diag+6)&&v&&*(guint16*)(v+6)==0x0101&&load(diag)==0){
+   diag_counts[6]=(*(guint64*)v&0xffffffffffffULL)==runtime_config[8]+8;
+   diag_qpc=*out;g_atomic_int_add(diag+5,1);g_atomic_int_add(diag,1);
+   while(!load(diag+1))Sleep(1);*out=(gint64)diag_qpc;
+ }return okay;}
 void ctor(gpointer ctx,gpointer actor,gint action,guint8 fourth,guint8 fifth){guint i;stats[0]++;
  if((guint64)actor!=cfg[0]+0x1b0||action||fourth||fifth!=1||((guint64)ctx&15))stats[1]++;
  for(i=0;i<48;i++)if(((guint8*)ctx)[i])stats[1]++;
@@ -47,7 +57,7 @@ guint8 dispatch(gpointer player,guint64 handle,gpointer ctx){guint64 component,h
  block(3);if(load(controls+4)!=3&&load(controls+4)!=8){*(guint*)(body+0x4d0)=0;*(guint*)(body+0x388)=5;}return 1;
 }
 guint8 query(gpointer level,gpointer vector,gpointer centre,float radius,gpointer type,guint8 flag,gpointer optional){
- guint64*v=vector,*data;guint n=2,i;float*c=centre;stats[10]++;
+ guint64*v=vector,*data;guint n=2,i;float*c=centre;stats[10]++;if(diag_counts[5])diag_counts[4]++;diag_counts[0]++;diag_counts[5]=1;
  if((guint64)level!=cfg[29]||(guint64)type!=cfg[30]||radius!=2.0f||flag||optional||
     c[0]!=0||c[1]!=0||c[2]!=0||(v[0]&0xffffffffffffULL)!=(guint64)((guint8*)vector+8)||*(guint16*)((guint8*)vector+6)!=0x0101)stats[11]++;
  block(5);if(load(controls+4)==4)Sleep(320);
@@ -58,10 +68,13 @@ guint8 query(gpointer level,gpointer vector,gpointer centre,float radius,gpointe
  }return 0x81;
 }
 void destroy(gpointer vector){guint64*v=vector;stats[14]++;
+ if(diag_counts[5]){diag_counts[1]++;diag_counts[5]=0;}else{diag_counts[2]++;
+ if((v[0]&0xffffffffffffULL)!=(guint64)((guint8*)vector+8)||*(guint16*)((guint8*)vector+6)!=0x0101)diag_counts[3]++;}
  if(!((guint8*)vector)[7]){if(!HeapFree(GetProcessHeap(),0,(gpointer)(v[0]&0xffffffffffffULL)))stats[11]++;else stats[13]++;}
  v[0]=((guint64)vector+8)&0xffffffffffffULL;*(guint16*)((guint8*)vector+6)=0x0101;block(6);
 }
 guint64 tick(gpointer player,guint64 value,guint64 depth){
+ if(load(diag+6)&&(guint64)player!=cfg[0]&&load(diag)){g_atomic_int_add(diag+2,1);while(!load(diag+3))Sleep(1);}
  if(load(controls+5)&&(load(controls+4)==7||load(controls+4)==11)){
    guint k;for(k=0;k<2;k++){
      guint64 body=k?cfg[26]:cfg[7],component=k?cfg[28]:cfg[9],proxy=*(guint64*)(body+0x38);
@@ -84,7 +97,7 @@ guint worker(gpointer a){Worker*w=a;guint i;w->thread_id=GetCurrentThreadId();
    if(((Tick)tick_address)(w->player,i,0)!=(((guint64)w->player^i)+0x1234))w->failures++;Sleep(load(controls+7)?1:16);}
  w->done=1;return 0;}
 `;
-const fixture=new CModule(fixtureSource,{cfg,runtime_config:runtimeConfig,stats:fixtureStats,controls,tick_address:tickAddress,
+const fixture=new CModule(fixtureSource,{cfg,runtime_config:runtimeConfig,stats:fixtureStats,controls,tick_address:tickAddress,diag,diag_counts:diagCounts,diag_qpc:diagQpc,
  Sleep:address('Sleep'),GetCurrentThreadId:address('GetCurrentThreadId'),GetTickCount64:address('GetTickCount64'),
  QueryPerformanceCounter:address('QueryPerformanceCounter'),GetProcessHeap:address('GetProcessHeap'),HeapAlloc:address('HeapAlloc'),HeapFree:address('HeapFree')});
 const cm=new CModule(coreSource,{runtime_config:runtimeConfig,cfg:bindingCfg,state,ReadProcessMemory:address('ReadProcessMemory'),
@@ -111,6 +124,8 @@ for(let i=0;i<2;i++){const s={body:Memory.alloc(0x620),human:Memory.alloc(0x2870
  component:storage.add(i*0x4000+0x180),handle:uint64('0x52e1c4f400000018').add(i*0x400)};sources.push(s);transform(s.body,1+i*0.5);}
 for(let i=0;i<2;i++)groundMeta.push({proxy:storage.add(i*0x4000+0x780),handle:sources[i].handle.add(0x60),node:Memory.alloc(24),table:Memory.alloc(24),records:Memory.alloc(72)});
 function initialize(mode){
+ diag.writeByteArray(new Uint8Array(32));diagCounts.writeByteArray(new Uint8Array(64));diagQpc.writeU64(0);
+ if(mode==='prequery_concurrency')diag.add(24).writeS32(1);
  state.writeByteArray(new Uint8Array(32768));bindingCfg.writeByteArray(new Uint8Array(256));cfg.writeByteArray(new Uint8Array(256));runtimeConfig.writeByteArray(new Uint8Array(128));fixtureStats.writeByteArray(new Uint8Array(128));controls.writeByteArray(new Uint8Array(32));controls.add(12).writeS32(1);
  q(gameSlot,game);q(game,image.add(0x259fe08));q(game.add(0x138),level);q(level.add(0xec8),client);q(client.add(0x88),client);q(client.add(0x90),player);
  for(const p of [player,player2]){q(p,image.add(0x259c450));q(p.add(0x20),image.add(0x259d100));q(p.add(0x40),entityLevel);}
@@ -214,7 +229,7 @@ function allJoined(){if(handles.some(h=>wait(h,0)!==0))return false;handles.forE
 function snapshot(){const okay=snap(snapBuffer)!==0;return {snapshot_available:okay,values:okay?Array.from({length:50},(_,i)=>snapBuffer.add(i*8).readU64().toString()):[],
  events:okay?Array.from({length:Math.min(snapBuffer.add(13*8).readU64().toNumber(),64)},(_,i)=>Array.from({length:16},(_,j)=>snapBuffer.add((64+i*16+j)*8).readU64().toString())):[],
  cadence:okay?Array.from({length:Math.min(snapBuffer.add(15*8).readU64().toNumber(),64)},(_,i)=>Array.from({length:5},(_,j)=>snapBuffer.add((64+64*16+i*5+j)*8).readU64().toString())):[],
- stats:Array.from({length:16},(_,i)=>fixtureStats.add(i*8).readU64().toNumber()),blocked:controls.add(4).readS32(),
+ vector_lifecycle:Array.from({length:8},(_,i)=>diagCounts.add(i*8).readU64().toNumber()),stats:Array.from({length:16},(_,i)=>fixtureStats.add(i*8).readU64().toNumber()),blocked:controls.add(4).readS32(),
  register_failures:registerFailures.readU32(),event_extra:okay?Array.from({length:64},(_,i)=>Array.from({length:4},(_,j)=>snapBuffer.add((64+64*16+64*5+i*4+j)*8).readU64().toString())):[],body_states:sources.map(s=>({count:s.body.add(0x4d0).readU32(),state:s.body.add(0x388).readU32(),flags:s.body.add(0x4f0).readU8()}))};}
 rpc.exports={configure(mode){if(listener||!joined)throw new Error('Must be idle');initialize(mode);registerFailures.writeU32(0);listener=Interceptor.attach(fixture.tick,{onEnter:cm.on_enter,onLeave:cm.on_leave});Interceptor.flush();return {state_size:size,snapshot_size:snapSize};},
  run(count,threads,secondPlayer){joined=false;workers=[];handles=[];for(let i=0;i<threads;i++){const a=Memory.alloc(40);q(a,secondPlayer?player2:player);a.add(8).writeU32(count);workers.push(a);const h=createThread(NULL,0,fixture.worker,a,0,NULL);if(h.isNull())throw new Error('Thread failed');handles.push(h);}return true;},
@@ -222,3 +237,10 @@ rpc.exports={configure(mode){if(listener||!joined)throw new Error('Must be idle'
  poll(){return {joined:allJoined(),...snapshot(),workers:workers.map(a=>({failures:a.add(16).readU64().toNumber(),done:a.add(24).readU64().toNumber()}))};},
  disable(){disable();return true;},release(){controls.add(8).writeS32(1);return true;},
  stop(){disable();if(pending())return {deferred:true,resources_retained:true};if(listener){listener.detach();listener=null;}Interceptor.flush();return {restored:Array.from(new Uint8Array(fixture.tick.readByteArray(16))).every((v,i)=>v===original[i]),joined:allJoined(),resources_retained:true,...snapshot()};}}
+
+Object.assign(rpc.exports,{
+ diag(){return {flags:Array.from({length:8},(_,i)=>diag.add(i*4).readS32()),counts:Array.from({length:8},(_,i)=>diagCounts.add(i*8).readU64().toNumber()),workers:workers.map(a=>({done:a.add(24).readU64().toNumber()}))};},
+ diagsecond(){const a=Memory.alloc(40);q(a,player2);a.add(8).writeU32(1);workers.push(a);const h=createThread(NULL,0,fixture.worker,a,0,NULL);if(h.isNull())throw new Error('Secondary worker failed');handles.push(h);return true;},
+ releaseclock(){diag.add(4).writeS32(1);return true;},
+ releasesecond(){diag.add(20).writeS32(0);diag.add(12).writeS32(1);return true;}
+});

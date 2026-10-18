@@ -1,5 +1,9 @@
 $ErrorActionPreference = 'Stop'
 $taskRoot = $PSScriptRoot
+. (Join-Path $taskRoot 'AutoLoot-Common.ps1')
+$taskPrevious = Get-AutoLootPreviousRoot
+if ($taskPrevious -and $taskPrevious -ne $taskRoot -and (Test-Path -LiteralPath $taskPrevious -PathType Container)) { Stop-AutoLootInstallation $taskPrevious }
+Stop-AutoLootInstallation $taskRoot
 $taskVenvPython = Join-Path $taskRoot '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $taskVenvPython -PathType Leaf)) {
     $taskPython = $null
@@ -19,4 +23,6 @@ if (-not (Test-Path -LiteralPath $taskVenvPython -PathType Leaf)) {
 if ($LASTEXITCODE -ne 0) { throw 'Installation des dependances impossible.' }
 & $taskVenvPython (Join-Path $taskRoot 'tools\autoloot_runtime.py') --dummy
 if ($LASTEXITCODE -ne 0) { throw 'Le controle hors jeu a echoue. Consulter le resultat affiche.' }
-Write-Host 'Installation et controles hors jeu termines. Charger une partie puis utiliser Lancer-AutoLoot.cmd.'
+Register-AutoLootStartup $taskRoot
+& (Join-Path $taskRoot 'Lancer-AutoLoot.ps1')
+Write-Host 'Installation terminee. AutoLoot demarrera automatiquement avec vos prochaines parties et a chaque ouverture de Windows.'
