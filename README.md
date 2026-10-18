@@ -62,4 +62,10 @@ python -m venv .venv
 
 The builder verifies pinned downloads, bundles the official Python embeddable distribution with complete dependency wheels, runs offline native qualification against its own disposable process, then creates the installer in `dist`. No game files or local runtime state are distributed. Third-party licenses remain with their packages.
 
+## GitHub Releases
+
+The **Build and publish installer** workflow builds the EXE on GitHub's Windows runners, runs the regression and embedded-runtime checks, then attaches the installer and its SHA256 checksum to GitHub Releases. Publishing runs only after successful checks.
+
+To release a new version, update `VERSION` in `tools/build_installer.py`, commit the change, then push the matching tag (for example `v1.2.0`). The workflow creates the Release automatically. To rebuild an existing version, open **Actions → Build and publish installer → Run workflow** on `main` and enter its existing tag, such as `v1.1.0`. It builds that tag's source and replaces its release files without changing the release description.
+
 For source-only setup, `Install-AutoLoot.vbs` creates a local virtual environment and requires Python 3.11+ x64 and Internet access. Its companion Pause, Resume and Uninstall helpers control that source installation. The EXE installer is the recommended player installation.

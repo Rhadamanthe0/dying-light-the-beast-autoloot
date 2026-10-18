@@ -44,3 +44,4 @@
 !/.github/workflows/
 /.github/workflows/*
 !/.github/workflows/tests.yml
+!/.github/workflows/release.yml
