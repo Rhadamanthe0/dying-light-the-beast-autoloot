@@ -14,6 +14,8 @@ import uuid
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tools'))
+from runtime_paths import python_executable
 DATA = ROOT / 'evidence/autoloot5m'
 POLL_SECONDS = 10
 
@@ -111,7 +113,7 @@ class WindowsBackend:
         self.api.OpenMutexW.restype = W.HANDLE
         self.api.WaitForSingleObject.argtypes = [W.HANDLE, W.DWORD]
         self.api.WaitForSingleObject.restype = W.DWORD
-        self.pythonw = gui_python(ROOT / '.venv/Scripts/pythonw.exe')
+        self.pythonw = gui_python(python_executable(ROOT, windowed=True))
         self.args = args
 
     def runtime_running(self):

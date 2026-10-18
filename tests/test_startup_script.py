@@ -24,6 +24,8 @@ class StartupScriptTests(unittest.TestCase):
 
     def sandbox(self, folder):
         (folder / 'tools').mkdir()
+        (folder / '.venv/Scripts').mkdir(parents=True)
+        (folder / '.venv/Scripts/pythonw.exe').touch()
         shutil.copy2(ROOT / 'tools/manage.ps1', folder / 'tools/manage.ps1')
         return ". (Join-Path $PSScriptRoot 'tools/manage.ps1')\nfunction Get-AutoLootStartupPath { Join-Path $PSScriptRoot 'test-startup.lnk' }\n"
 
@@ -41,6 +43,94 @@ $link.Save()
 $refused = $false
 try { Get-AutoLootPreviousRoot } catch { $refused = $true }
 if (-not $refused) { throw 'Unrecognized shortcut accepted' }
+'''
+            self.run_script(folder, script)
+
+    def test_bundled_shortcut_and_missing_runtime_refuses_fallback(self):
+        with tempfile.TemporaryDirectory(prefix='autoloot-bundled-startup-') as temp:
+            folder = Path(temp)
+            script = self.sandbox(folder) + '''
+New-Item -ItemType Directory -Path (Join-Path $PSScriptRoot 'runtime') | Out-Null
+New-Item -ItemType File -Path (Join-Path $PSScriptRoot 'runtime\\pythonw.exe') | Out-Null
+Register-AutoLootStartup $PSScriptRoot
+if ((Get-AutoLootPreviousRoot) -ne $PSScriptRoot) { throw 'Bundled root roundtrip failed' }
+$link = (New-Object -ComObject WScript.Shell).CreateShortcut((Get-AutoLootStartupPath))
+if ($link.TargetPath -ne (Join-Path $PSScriptRoot 'runtime\\pythonw.exe')) { throw 'Wrong bundled target' }
+Remove-Item -LiteralPath (Join-Path $PSScriptRoot 'runtime\\pythonw.exe')
+$refused = $false
+try { Get-AutoLootPython $PSScriptRoot -Windowed } catch { $refused = $true }
+if (-not $refused) { throw 'Incomplete bundle fell back to source Python' }
+'''
+            self.run_script(folder, script)
+
+    def test_prepare_preserves_pause_before_its_own_stop_and_drains_both_roots(self):
+        for paused in (False, True):
+            with self.subTest(paused=paused), tempfile.TemporaryDirectory(prefix='autoloot-prepare-') as temp:
+                folder = Path(temp)
+                script = self.sandbox(folder)
+                previous = folder / 'previous'
+                previous.mkdir()
+                if paused:
+                    (previous / 'evidence/autoloot5m').mkdir(parents=True)
+                    (previous / 'evidence/autoloot5m/watch.pause').write_text('user pause')
+                script += '''
+function Get-AutoLootPreviousRoot { Join-Path $PSScriptRoot 'previous' }
+Prepare-AutoLoot $PSScriptRoot (Join-Path $PSScriptRoot 'state.json')
+$state = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'state.json') -Raw | ConvertFrom-Json
+if ($state.keep_paused -ne EXPECTED_PAUSE) { throw 'Pause snapshot included installation shutdown' }
+foreach ($root in @($PSScriptRoot, (Join-Path $PSScriptRoot 'previous'))) {
+    if (-not (Test-Path -LiteralPath (Join-Path $root 'evidence\\autoloot5m\\watch.stop'))) { throw 'An installation was not stopped' }
+}
+'''.replace('EXPECTED_PAUSE', '$true' if paused else '$false')
+                self.run_script(folder, script)
+
+    def test_keep_paused_does_not_publish_resume_or_remove_pause(self):
+        with tempfile.TemporaryDirectory(prefix='autoloot-preserve-pause-') as temp:
+            folder = Path(temp)
+            script = self.sandbox(folder) + '''
+function Get-AutoLootWatcher([string]$InstallationRoot) { [Diagnostics.Process]::GetCurrentProcess() }
+Resume-AutoLoot $PSScriptRoot -KeepPaused
+if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'evidence\\autoloot5m\\watch.pause'))) { throw 'User pause removed' }
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'evidence\\autoloot5m\\watch.resume')) { throw 'Unexpected resume acknowledgement' }
+'''
+            self.run_script(folder, script)
+
+    def test_no_autostart_prepares_qualifies_and_uninstalls_without_startup_access(self):
+        with tempfile.TemporaryDirectory(prefix='autoloot-no-autostart-') as temp:
+            folder = Path(temp)
+            script = self.sandbox(folder)
+            (folder / 'tools/autoloot_runtime.py').write_text('import sys\nassert sys.argv[1:] == ["--dummy"]\n')
+            base_python = str(getattr(sys, '_base_executable', sys.executable)).replace("'", "''")
+            script += f"function Get-AutoLootPython {{ '{base_python}' }}\n" + '''
+function Get-AutoLootStartupPath { throw 'Real Startup must not be accessed' }
+function Register-AutoLootStartup { throw 'Startup must not be registered' }
+function Resume-AutoLoot { throw 'Watcher must not be started' }
+Prepare-AutoLoot $PSScriptRoot (Join-Path $PSScriptRoot 'state.json') -SkipAutoStart
+Configure-AutoLoot $PSScriptRoot (Join-Path $PSScriptRoot 'state.json') -SkipAutoStart
+if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'evidence\\autoloot5m\\watch.pause'))) { throw 'Audit install is not paused' }
+Uninstall-AutoLoot $PSScriptRoot -SkipAutoStart
+'''
+            self.run_script(folder, script)
+
+    def test_qualification_failure_never_registers_or_starts(self):
+        with tempfile.TemporaryDirectory(prefix='autoloot-qualification-refusal-') as temp:
+            folder = Path(temp)
+            script = self.sandbox(folder)
+            (folder / 'tools/autoloot_runtime.py').write_text('raise SystemExit(3)\n')
+            base_python = str(getattr(sys, '_base_executable', sys.executable)).replace("'", "''")
+            script += f"function Get-AutoLootPython {{ '{base_python}' }}\n" + '''
+function Register-AutoLootStartup { Set-Content -LiteralPath (Join-Path $PSScriptRoot 'registered') -Value 'bad' }
+function Resume-AutoLoot { Set-Content -LiteralPath (Join-Path $PSScriptRoot 'started') -Value 'bad' }
+Prepare-AutoLoot $PSScriptRoot (Join-Path $PSScriptRoot 'state.json')
+$refused = $false
+try { Configure-AutoLoot $PSScriptRoot (Join-Path $PSScriptRoot 'state.json') } catch {
+    if ($_ -notlike '*Offline checks failed*') { throw }
+    $refused = $true
+}
+if (-not $refused) { throw 'Failed qualification was accepted' }
+if ((Test-Path -LiteralPath (Join-Path $PSScriptRoot 'registered')) -or
+    (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'started'))) { throw 'Failed bundle was activated' }
+if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'evidence\\autoloot5m\\watch.pause'))) { throw 'Failed bundle is not paused' }
 '''
             self.run_script(folder, script)
 

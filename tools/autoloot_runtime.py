@@ -203,7 +203,7 @@ def dummy():
             report['cases'].append({'name':mode,'passed':True,'clock':'controlled_frozen_prequery_inflight' if mode=='prequery_concurrency' else 'accelerated_tick_and_qpc' if mode in ('bounded_logs','cooldown_pressure') else 'real_windows_clocks',
               'result':result,'cleanup':stop,'qpc_intervals_ms':[(b-a)/frequency*1000 for a,b in zip(qpc,qpc[1:])]})
         bounded(script.unload);report['script_unloaded']=True;bounded(session.detach);session=None;report['session_detached']=True
-        host_tests=subprocess.run([sys.executable,str(ROOT/'tools/autoloot_runtime_fixture.py')],capture_output=True,text=True,encoding='utf-8',timeout=30)
+        host_tests=subprocess.run([sys.executable,str(ROOT/'tools/autoloot_runtime_fixture.py')],capture_output=True,text=True,encoding='utf-8',timeout=30,creationflags=subprocess.CREATE_NO_WINDOW)
         report['host_tests']={'passed':host_tests.returncode==0,'exit_code':host_tests.returncode,
           'output':(host_tests.stdout+host_tests.stderr)[-4000:]}
         if host_tests.returncode:raise AssertionError('Host-control regression tests failed')

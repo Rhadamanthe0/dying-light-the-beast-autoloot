@@ -287,8 +287,9 @@ class WatchTests(unittest.TestCase):
 
     @unittest.skipUnless(watch.os.name == 'nt', 'Windows GUI process contract')
     def test_installed_pythonw_owned_child_has_no_console(self):
-        executable = watch.ROOT / '.venv/Scripts/pythonw.exe'
-        if not executable.exists():
+        try:
+            executable = watch.python_executable(watch.ROOT, windowed=True)
+        except FileNotFoundError:
             self.skipTest('Run installer before the real pythonw fixture')
         watch.gui_python(executable)
         output = Path(self.temp.name)/'owned-gui-child.json'
@@ -313,6 +314,18 @@ class WatchTests(unittest.TestCase):
         with patch.object(watch, 'write_json', return_value=False):
             self.assertEqual(self.watcher.step()['state'], 'worker_running')
         self.assertIsNotNone(self.watcher.worker)
+
+    def test_backend_resolves_interpreter_before_gui_validation(self):
+        api = SimpleNamespace(OpenMutexW=Mock(), WaitForSingleObject=Mock())
+        discovery = SimpleNamespace(api_setup=Mock(return_value=api))
+        expected = self.args.status.parent/'runtime/pythonw.exe'
+        with patch.dict(sys.modules, {'discover_session': discovery}), \
+                patch.object(watch, 'python_executable', return_value=expected) as resolve, \
+                patch.object(watch, 'gui_python', return_value=expected) as validate:
+            backend = watch.WindowsBackend(self.args)
+        resolve.assert_called_once_with(watch.ROOT, windowed=True)
+        validate.assert_called_once_with(expected)
+        self.assertEqual(backend.pythonw, expected)
 
     def test_empty_game_enumeration_does_not_parse_pe_or_discover(self):
         backend = object.__new__(watch.WindowsBackend)
