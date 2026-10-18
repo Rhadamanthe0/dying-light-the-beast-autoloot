@@ -41,6 +41,7 @@ class HostTests(unittest.TestCase):
                     # so a missing disabled check fails deterministically, not by timeout.
                     if self.polls>=2:args.stop_file.write_text('stop')
                     return {'type':'poll','result':{'ready':True,'stats':{'disabled':1,'last_cycle_status':6}}}
+                if mode=='dispatch_limit':return {'type':'poll','result':{'ready':True,'stats':{'dispatch_limit_reached':1}}}
                 args.stop_file.write_text('stop')
                 return {'type':'poll','result':{'ready':False}}
         class Script:
@@ -136,6 +137,12 @@ class HostTests(unittest.TestCase):
         code,report,status,*_=self.invoke(mode='native_disabled')
         self.assertEqual(code,1);self.assertFalse(report['ok']);self.assertEqual(status['phase'],'error')
         self.assertFalse(status['running']);self.assertTrue(any('disabled itself' in e for e in report['errors']))
+        self.assertEqual(self.trace[-3:],['stop','unload','detach'])
+
+    def test_dispatch_cap_is_normal_stop_not_native_fault(self):
+        code,report,status,*_=self.invoke(mode='dispatch_limit')
+        self.assertEqual(code,0);self.assertTrue(report['ok']);self.assertTrue(report['dispatch_limit_reached'])
+        self.assertEqual(status['phase'],'stopped');self.assertEqual(report['errors'],[])
         self.assertEqual(self.trace[-3:],['stop','unload','detach'])
 
 

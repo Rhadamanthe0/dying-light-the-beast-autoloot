@@ -1,15 +1,16 @@
 # AutoLoot — Dying Light: The Beast
 
-Prototype Windows pour fouiller automatiquement les cadavres à **5 mètres**, sans viser ni appuyer sur la touche de fouille.
+Prototype Windows pour fouiller automatiquement les cadavres et ramasser les objets standard au sol à **5 mètres**, sans viser ni appuyer sur une touche.
 
-Le mode résident prévoit un passage toutes les **250 ms** sur les mises à jour du joueur. La distance, le cadavre et le droit de fouille sont revérifiés avant l'action normale du jeu. Les cadavres initialement vides sont également pris en charge.
+Le mode résident prévoit un passage toutes les **250 ms** sur les mises à jour du joueur. La distance, la source et l'autorisation de ramassage sont revérifiées avant l'action normale du jeu. Les cadavres initialement vides sont également pris en charge.
 
 ## État
 
 - Le ramassage réel a déjà été confirmé en partie : **5 unités d'argent de l'ancien monde** reçues ; une fouille automatique a aussi réussi à **4,54 m**.
 - Le mode résident a été confirmé en partie : butin reçu et jeu fluide. Sur un relevé de 15 secondes, les passages étaient espacés de 253,80 à 265,63 ms. Voir [les vérifications et leurs limites](docs/VALIDATION.md).
 - La coopération conserve le dispatcher du joueur local ; **le résultat à deux joueurs reste à vérifier**.
-- Cette version traite les cadavres. Les objets posés au sol ne sont pas encore pris en charge.
+- Le ramassage des composants au sol est ajouté et exercé en partie. Les essais sur d'autres objets restent en cours.
+- Le prototype conserve les refus du jeu : il ne force pas l'action d'échange lorsqu'une arme ne peut pas entrer dans l'inventaire. Les armes n'ont pas encore été vérifiées en partie.
 
 ## Configuration requise
 
@@ -26,7 +27,7 @@ Aucun compilateur ni remplacement de fichier du jeu n'est nécessaire. Les dépe
 2. Double-cliquer sur **`Installer-AutoLoot.cmd`**. L'installation crée l'environnement Python et exécute les contrôles hors jeu. Attendre le message de réussite.
 3. Lancer le jeu et charger une partie.
 4. Double-cliquer sur **`Lancer-AutoLoot.cmd`**. Le message « AutoLoot actif » confirme que le programme est attaché. En cas d'échec, la fenêtre affiche la raison.
-5. Se déplacer normalement : les cadavres admissibles à moins de 5 mètres sont fouillés automatiquement.
+5. Se déplacer normalement : les cadavres admissibles sont fouillés et les objets standard ramassables sont récupérés à moins de 5 mètres.
 
 Pour arrêter, double-cliquer sur **`Arreter-AutoLoot.cmd`**. Une action native déjà commencée se termine avant le retrait. Fermer le jeu termine également le programme. Après avoir relancé le jeu, relancer AutoLoot.
 
@@ -60,7 +61,7 @@ La présence ou l'absence de ticks dans tous les menus et états de pause n'est 
 | Jeu introuvable | Charger une partie ; vérifier le chemin ci-dessus. |
 | Version non prise en charge | Conserver le refus et signaler la version ; ne pas retirer les contrôles de signature. |
 | Une instance est déjà active | Utiliser `Arreter-AutoLoot.cmd` avant de relancer. |
-| Pas de butin | Vérifier que le cadavre est fouillable et dans le rayon ; un cadavre peut être vide ou l'inventaire plein. |
+| Pas de butin | Vérifier que la source est ramassable et dans le rayon ; un cadavre peut être vide ou l'inventaire plein. Certains objets et interactions ne sont pas pris en charge. |
 
 L'état et les journaux se trouvent dans `evidence/autoloot5m/`. Ils restent locaux. Ne pas arrêter de force Python pendant une action native : utiliser le script d'arrêt.
 

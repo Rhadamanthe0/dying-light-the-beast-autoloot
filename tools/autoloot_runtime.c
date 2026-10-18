@@ -19,10 +19,10 @@ extern guint64 runtime_config[16];
 extern guint64 cfg[32];
 enum {PLAYER,GAME,GAME_SLOT,BASE,LEVEL,CLIENT,GATE,BODY,HUMAN,COMPONENT,STRATEGY,MANAGER,
 POOL_SLOT,HANDLE,CONTEXT,DEADLINE,POOL,STORAGE,ENTITY,VECTOR_DATA,VECTOR_PACKED,VECTOR_COUNT,
-COMPONENT_INDEX,EXPECTED_COUNT,EXPECTED_STATE,RADIUS_MM};
+COMPONENT_INDEX,EXPECTED_COUNT,EXPECTED_STATE,RADIUS_MM,SOURCE_KIND,RECEIVER_HANDLE,PROXY,SENDER_NODE,RECEIVER_CALLBACK,RECEIVER_TABLE};
 typedef struct {guint count,body_state,cache;float player[3],body[3];guint64 manager,component,strategy,human,body_pointer,control_human,control_body;} Witness;
-typedef struct {guint valid,count,body_state;} Post;
-typedef struct {guint64 body,human,handle,until;guint failed;} Cooldown;
+typedef struct {guint valid,count,body_state,ground_flags,invalidated;} Post;
+typedef struct {guint64 body,human,handle,until,receiver_handle;guint failed;} Cooldown;
 typedef struct {
   volatile gint disabled,gate,inflight,selected,matching,ignored,contended;
   guint reason,reads,take_mode,status,post_phase;guint64 nested_container;
@@ -33,6 +33,8 @@ typedef struct {
   guint64 dispatch_inflight,thread_id,last_cycle_reads,query_al,last_processed,last_copied,cooldown_pressure;
   guint64 next_due_qpc,last_start_qpc,minimum_interval_qpc,maximum_interval_qpc;
   guint64 cycle_start_qpc;
+  guint64 limit_reached,ground_dispatches,ground_completed,ground_refused;
+  guint64 event_extra[64][4];
 } State;
 extern State state;
 typedef struct {gpointer player;} Invocation;
@@ -92,7 +94,7 @@ static gboolean pool_guard(void) {
   return cfg[COMPONENT]==block[0]+offset;
 }
 #define QEQ(address,value) do { if(!q((address),&v) || v!=(guint64)(value)) return FALSE; } while(0)
-static gboolean guard(Witness *w) {
+static gboolean guard_body(Witness *w) {
   guint64 v,body_control,human_control; guint8 bytes[48], packed[16]; guint count,i; float d,dist=0;
   state.reason=1;
   QEQ(cfg[GAME_SLOT],cfg[GAME]);
@@ -149,7 +151,7 @@ static gboolean canaries(void) {
 static gboolean stopped(void){return atomic_get(&state.disabled)!=0;}
 static gboolean budget(void){guint64 now;QueryPerformanceCounter((gint64*)&now);
   return now-state.cycle_start_qpc>=(runtime_config[10]*8+999)/1000 || state.reads>=4096;}
-static gboolean checkpoint(void){return !stopped()&&!budget()&&atomic_get(&state.inflight)==1;}
+static gboolean checkpoint(void){return !stopped()&&!state.limit_reached&&!budget()&&atomic_get(&state.inflight)==1;}
 static gboolean local_guard(void){guint64 v;
   QEQ(cfg[GAME_SLOT],cfg[GAME]);
   if(!is_type(cfg[PLAYER],0x259c450)||!is_type(cfg[GAME],0x259fe08))return FALSE;
@@ -157,10 +159,10 @@ static gboolean local_guard(void){guint64 v;
   QEQ(cfg[GAME]+0x138,cfg[LEVEL]);QEQ(cfg[LEVEL]+0xec8,cfg[CLIENT]);
   QEQ(cfg[CLIENT]+0x88,cfg[GATE]);QEQ(cfg[CLIENT]+0x90,cfg[PLAYER]);return TRUE;
 }
-static gboolean bind(guint64 body){
+static gboolean bind_body(guint64 body){
   guint64 reciprocal,v,poolwords[2],packed,handle,component,strategy,owner,found=0;
   guint count,i,offset;guint8 vector[16],contents[16];
-  cfg[BODY]=body;cfg[HUMAN]=cfg[HANDLE]=cfg[COMPONENT]=0;
+  cfg[SOURCE_KIND]=0;cfg[BODY]=body;cfg[HUMAN]=cfg[HANDLE]=cfg[COMPONENT]=0;
   state.reason=20;
   if(!is_type(body,0x29e84f0)||!q(body+0x5f0,&reciprocal)||reciprocal<0x10070)return FALSE;
   cfg[HUMAN]=reciprocal-0x70;
@@ -187,26 +189,107 @@ static gboolean bind(guint64 body){
   if(cfg[EXPECTED_COUNT]>512)return FALSE;
   return pool_guard();
 }
+
+static gboolean pool_pair(guint64 component,guint64 handle){gboolean okay;guint64 c=cfg[COMPONENT],h=cfg[HANDLE];
+  cfg[COMPONENT]=component;cfg[HANDLE]=handle;okay=pool_guard();cfg[COMPONENT]=c;cfg[HANDLE]=h;return okay;}
+static gboolean item_callbacks(void){
+  guint8 b[192],header[16];guint count,i,j,mask=0,seen=0;guint64 data,guid,fn;gint delta;
+  if(!rpm(cfg[RECEIVER_TABLE]+8,header,16))return FALSE;
+  count=header[7]?header[7]-1:u32(header+8);data=u64(header)&0xffffffffffffULL;
+  if(count>128)return FALSE;
+  for(i=0;i<count;i+=8){guint n=count-i<8?count-i:8;if(!rpm(data+24*i,b,n*24))return FALSE;
+    for(j=0;j<n;j++){guint bit=0;guint rva=0;guid=u64(b+24*j);fn=u64(b+24*j+8);copy(&delta,b+24*j+16,4);
+      if(guid==0x53139e0185c9a12fULL){bit=1;rva=0x16e8c20;}
+      if(guid==0xcbbfaec882b2a3eaULL){bit=2;rva=0x16e9040;}
+      if(guid==0x5f2b7eb72fee8475ULL){bit=4;rva=0x16e8cd0;}
+      if(bit){if((mask&bit)||fn!=cfg[BASE]+rva||delta!=0x20)return FALSE;mask|=bit;seen++;}
+    }
+  }
+  return mask==7&&seen==3;
+}
+static gboolean guard_item(Witness*w){
+  guint64 v;guint8 vector[16],flag,forwarding[24];guint count,i;float d,dist=0;
+  state.reason=40;
+  if(!local_guard()||!is_type(cfg[BODY],0x29ec228)||!is_type(cfg[PROXY],0x2d326f8)||
+     !is_type(cfg[COMPONENT],0x293c8c0)||!pool_guard()||!pool_pair(cfg[PROXY],cfg[RECEIVER_HANDLE]))return FALSE;
+  QEQ(cfg[BODY]+0x10,cfg[BASE]+0x29ec8f0);QEQ(cfg[BODY]+0x20,cfg[BASE]+0x29ecbc8);
+  QEQ(cfg[BODY]+0x38,cfg[PROXY]);QEQ(cfg[PROXY]+0x10,cfg[ENTITY]);QEQ(cfg[PROXY]+0x48,cfg[BODY]+0x20);
+  QEQ(cfg[BASE]+0x2d326f8+0x128,cfg[BASE]+0x24ec9b6);QEQ(cfg[BASE]+0x257b948,runtime_config[7]+0xfba70);
+  QEQ(cfg[COMPONENT]+0x10,cfg[ENTITY]);QEQ(cfg[COMPONENT]+0x598,0);
+  if(!rpm(cfg[COMPONENT]+0x448,forwarding,24)||u64(forwarding)!=~0ULL||u64(forwarding+8)||u64(forwarding+16))return FALSE;
+  if(!rpm(cfg[ENTITY]+0x78,vector,16)||u64(vector)!=cfg[VECTOR_PACKED])return FALSE;
+  count=vector[7]?vector[7]-1:u32(vector+8);
+  if(count!=cfg[VECTOR_COUNT]||count>128||cfg[COMPONENT_INDEX]>=count)return FALSE;
+  QEQ(cfg[VECTOR_DATA]+cfg[COMPONENT_INDEX]*8,cfg[HANDLE]);
+  state.reason=41;
+  QEQ(cfg[COMPONENT]+0x70,cfg[BASE]+0x27ecf30);QEQ(cfg[COMPONENT]+0x78,cfg[SENDER_NODE]);
+  QEQ(cfg[SENDER_NODE],0);QEQ(cfg[SENDER_NODE]+8,cfg[RECEIVER_HANDLE]);QEQ(cfg[SENDER_NODE]+0x10,cfg[BODY]+0x270);
+  QEQ(cfg[BODY]+0x270,cfg[BASE]+0x27ecee0);QEQ(cfg[BASE]+0x27ecee0+8,cfg[BASE]+0x80cb40);
+  QEQ(cfg[BODY]+0x280,cfg[BODY]+0x268);QEQ(cfg[BODY]+0x278,cfg[RECEIVER_TABLE]);
+  if(!rpm(cfg[BODY]+0x2a0,&flag,1)||flag||!item_callbacks())return FALSE;
+  state.reason=42;
+  if(!rpm(cfg[BODY]+0x4f0,&flag,1)||(flag&1))return FALSE;
+  if(!position(cfg[PLAYER],w->player)||!position(cfg[BODY],w->body))return FALSE;
+  for(i=0;i<3;i++){d=w->player[i]-w->body[i];dist+=d*d;}if(dist>25.0f)return FALSE;
+  w->count=1;w->body_state=flag;w->body_pointer=cfg[BODY];w->component=cfg[COMPONENT];w->human=cfg[PROXY];
+  cfg[EXPECTED_COUNT]=flag;state.reason=0;return TRUE;
+}
+static gboolean guard(Witness*w){return cfg[SOURCE_KIND]?guard_item(w):guard_body(w);}
+static gboolean bind_item(guint64 item){
+  guint64 v,poolwords[2],packed,handle,c,owner;guint8 vec[16];guint count,i,offset,found=0;
+  cfg[SOURCE_KIND]=1;cfg[BODY]=item;cfg[HUMAN]=cfg[PROXY]=cfg[HANDLE]=cfg[COMPONENT]=0;
+  state.reason=43;
+  if(!is_type(item,0x29ec228)||!q(item+0x38,&cfg[PROXY])||!is_type(cfg[PROXY],0x2d326f8)||
+     !q(cfg[PROXY]+0x10,&cfg[ENTITY])||!rpm(cfg[ENTITY]+0x78,vec,16)||!q(cfg[POOL_SLOT],&cfg[POOL])||!rpm(cfg[POOL],poolwords,16))return FALSE;
+  cfg[HUMAN]=cfg[PROXY];cfg[STORAGE]=poolwords[0];packed=u64(vec);count=vec[7]?vec[7]-1:u32(vec+8);
+  if(!count||count>128)return FALSE;
+  cfg[VECTOR_PACKED]=packed;cfg[VECTOR_DATA]=packed&0xffffffffffffULL;cfg[VECTOR_COUNT]=count;
+  for(i=0;i<count;i++){if(!checkpoint())return FALSE;if(!q(cfg[VECTOR_DATA]+i*8,&handle))return FALSE;
+    offset=(guint)(handle<<4);if(offset<0x70||offset>=poolwords[1])continue;c=cfg[STORAGE]+offset;
+    if(!q(c,&v))return FALSE;if(v!=cfg[BASE]+0x293c8c0)continue;
+    if(!q(c+0x10,&owner)||owner!=cfg[ENTITY]||!q(c+0x598,&v))return FALSE;if(v)continue;
+    if(found++)return FALSE;cfg[COMPONENT]=c;cfg[HANDLE]=handle;cfg[COMPONENT_INDEX]=i;
+  }
+  if(found!=1||!q(cfg[COMPONENT]+0x78,&cfg[SENDER_NODE])||!cfg[SENDER_NODE]||!q(cfg[SENDER_NODE]+8,&cfg[RECEIVER_HANDLE])||
+     !q(cfg[SENDER_NODE]+0x10,&cfg[RECEIVER_CALLBACK])||cfg[RECEIVER_CALLBACK]!=item+0x270||
+     !q(item+0x278,&cfg[RECEIVER_TABLE]))return FALSE;
+  return TRUE;
+}
+static gboolean ground_context(void){guint8*ctx=p(CONTEXT);
+  return u64(ctx)==cfg[PLAYER]+0x1b0&&u32(ctx+8)==0&&ctx[0x18]==0x20;}
+static Post post_item(void){Post out={0};guint64 v;guint8 flag;
+  if(!q(cfg[BODY],&v)||v!=cfg[BASE]+0x29ec228)out.invalidated|=1;
+  if(!q(cfg[PROXY]+8,&v)||v!=cfg[RECEIVER_HANDLE])out.invalidated|=2;
+  if(!q(cfg[PROXY]+0x48,&v)||v!=cfg[BODY]+0x20)out.invalidated|=4;
+  if(rpm(cfg[BODY]+0x4f0,&flag,1)){out.ground_flags=flag;out.body_state=flag;out.valid=1;}
+  else{out.ground_flags=0xffffffff;out.invalidated|=8;}
+  if(out.invalidated)out.valid=1;
+  out.count=((out.ground_flags!=0xffffffff&&(out.ground_flags&1))||out.invalidated)?0:1;
+  return out;
+}
 static gboolean cooling(guint64 now){guint i;
-  for(i=0;i<64;i++){Cooldown*c=&state.cooldowns[i];if(c->body==cfg[BODY]&&c->human==cfg[HUMAN]&&c->handle==cfg[HANDLE]&&now<c->until)return TRUE;}return FALSE;
+  for(i=0;i<64;i++){Cooldown*c=&state.cooldowns[i];if(c->body==cfg[BODY]&&c->human==cfg[HUMAN]&&c->handle==cfg[HANDLE]&&
+    c->receiver_handle==(cfg[SOURCE_KIND]?cfg[RECEIVER_HANDLE]:0)&&now<c->until)return TRUE;}return FALSE;
 }
 static gint reserve_cooldown(void){guint i;guint64 now=GetTickCount64();
   for(i=0;i<64;i++)if(now>=state.cooldowns[i].until||!state.cooldowns[i].failed)return (gint)i;
   state.cooldown_pressure++;return -1;
 }
 static void cool(gint slot,guint milliseconds,guint failed){Cooldown*c=&state.cooldowns[slot];
-  c->body=cfg[BODY];c->human=cfg[HUMAN];c->handle=cfg[HANDLE];c->until=GetTickCount64()+milliseconds;c->failed=failed;}
+  c->body=cfg[BODY];c->human=cfg[HUMAN];c->handle=cfg[HANDLE];c->receiver_handle=cfg[SOURCE_KIND]?cfg[RECEIVER_HANDLE]:0;
+  c->until=GetTickCount64()+milliseconds;c->failed=failed;}
 static Post post(void){Post out={0,0,0};guint8 b[16];
   if(!is_type(cfg[BODY],0x29e84f0)||!is_type(cfg[HUMAN],0x2962618)||!is_type(cfg[PLAYER],0x259c450)||
      !rpm(cfg[BODY]+0x4c8,b,16)||!rpm(cfg[BODY]+0x388,&out.body_state,4))return out;
   out.count=b[7]?b[7]-1:u32(b+8);out.valid=out.count<=512;return out;
 }
 static void event(guint status,gint action,guint eligible,guint al,Post after,guint reads_before,guint64 start,Witness*before){
-  guint64 end,*e=state.events[state.event_cursor++%64];guint i;float ds=0,d;
+  guint64 end,slot=state.event_cursor++%64,*e=state.events[slot],*extra=state.event_extra[slot];guint i;float ds=0,d;
   QueryPerformanceCounter((gint64*)&end);for(i=0;i<16;i++)e[i]=0;
   for(i=0;i<3;i++){d=before->player[i]-before->body[i];ds+=d*d;}
   e[0]=state.cycles;e[1]=GetTickCount64();e[2]=cfg[BODY];e[3]=cfg[HUMAN];e[4]=cfg[HANDLE];e[5]=status;e[6]=state.reason;
   e[7]=before->count;e[8]=after.count;e[9]=after.body_state;e[10]=(guint64)(gint64)action;e[11]=eligible;e[12]=al;
+  extra[0]=cfg[SOURCE_KIND];extra[1]=cfg[SOURCE_KIND]?cfg[EXPECTED_COUNT]:0;extra[2]=after.ground_flags;extra[3]=after.invalidated;
   e[13]=state.reads-reads_before;e[14]=end-start;e[15]=ds>=0&&ds<=25?(guint)(ds*1000000.0f):~0ULL;state.events_total++;
 }
 static gboolean action(void){
@@ -218,32 +301,35 @@ static gboolean action(void){
   for(i=0;i<48;i++)ctx[i]=0;
   if(!checkpoint())goto cancel;
   context_ctor(ctx,(gpointer)(cfg[PLAYER]+0x1b0),0,0,1);
-  if(!canaries()){status=6;goto done;}if(!checkpoint())goto cancel;
+  if(!canaries()){status=6;goto done;}if(cfg[SOURCE_KIND]&&!ground_context()){status=9;goto done;}if(!checkpoint())goto cancel;
   resolved=get_component(p(POOL),cfg[HANDLE]);
   if(!checkpoint())goto cancel;if(resolved!=p(COMPONENT)){status=3;goto done;}
-  {guint64 m;if(!q(cfg[HUMAN]+0x5e8,&m)||!m||m!=cfg[MANAGER])goto done;}
+  if(!cfg[SOURCE_KIND]){guint64 m;if(!q(cfg[HUMAN]+0x5e8,&m)||!m||m!=cfg[MANAGER])goto done;}
   if(!checkpoint())goto cancel;
   id=select_action(resolved,ctx);
   if(!canaries()){status=6;goto done;}if(!checkpoint())goto cancel;
-  if(id!=1){status=9;goto done;}
+  if(id!=1||(cfg[SOURCE_KIND]&&!ground_context())){status=9;goto done;}
   eligible=can_use(resolved,1,ctx);
   if(!canaries()){status=6;goto done;}if(!checkpoint())goto cancel;
-  if(!eligible){status=9;goto done;}
+  if(!eligible||(cfg[SOURCE_KIND]&&!ground_context())){status=9;goto done;}
   if(!guard(&after)){status=5;goto done;}if(!checkpoint())goto cancel;
   cool_slot=reserve_cooldown();if(cool_slot<0){status=11;goto done;}
+  if(runtime_config[12]&&state.dispatches>=runtime_config[12]){state.limit_reached=1;status=12;goto done;}
   state.dispatch_inflight=1;state.dispatches++;did_dispatch=1;
+  if(cfg[SOURCE_KIND])state.ground_dispatches++;
+  if(runtime_config[12]&&state.dispatches>=runtime_config[12])state.limit_reached=1;
   al=player_dispatch(p(PLAYER),cfg[HANDLE],ctx);
   state.dispatch_inflight=0;
   /* Post reads finish even if stop/budget became true inside native dispatch. */
-  state.post_phase=1;result=post();state.post_phase=0;
-  status=result.valid&&result.count==0&&result.body_state==5?1:10;
+  state.post_phase=1;result=cfg[SOURCE_KIND]?post_item():post();state.post_phase=0;
+  status=result.valid&&result.count==0&&(cfg[SOURCE_KIND]||result.body_state==5)?1:10;
   if(!canaries())status=6;
-  if(status==1)state.completed++;
+  if(status==1){if(cfg[SOURCE_KIND])state.ground_completed++;else state.completed++;}
   goto done;
 cancel:
   status=stopped()?7:8;
 done:
-  if(status!=1)state.refused++;
+  if(status!=1){state.refused++;if(cfg[SOURCE_KIND])state.ground_refused++;}
   /* Pre-dispatch refusal can change by next tick (e.g. alive->dead): no long cache.
    * Native no-progress is not retried for60s for this exact generation tuple. */
   if(status==1)cool(cool_slot,30000,0);else if(did_dispatch)cool(cool_slot,60000,1);
@@ -282,10 +368,16 @@ destroy:
   for(i=0;i<n;i++){
     if(!checkpoint())break;
     if(raw[i]<0x10010){processed++;continue;}
-    if(!bind(raw[i]-0x10)){
+    {guint64 vt;if(!q(raw[i]-0x10,&vt))break;
+      if(vt==cfg[BASE]+0x29ec228&&runtime_config[11]){if(bind_item(raw[i]-0x10))goto bound;}
+      else if(vt==cfg[BASE]+0x29e84f0&&runtime_config[13]){if(bind_body(raw[i]-0x10))goto bound;}
+      else {processed++;continue;}
+    }
+    {
       if(!checkpoint())break;
       state.refused++;processed++;continue;
     }
+bound:
     if(cooling(GetTickCount64())){processed++;continue;}
     if(!action())break;processed++;
   }
@@ -306,7 +398,7 @@ static gboolean refresh_local(void){
      !is_type(player,0x259c450))return FALSE;
   if(cfg[PLAYER]!=player||cfg[GAME]!=game||cfg[LEVEL]!=level){
     guint n;state.next_offset=0;state.cooldown_cursor=0;
-    for(n=0;n<64;n++){state.cooldowns[n].body=0;state.cooldowns[n].human=0;state.cooldowns[n].handle=0;state.cooldowns[n].until=0;state.cooldowns[n].failed=0;}
+    for(n=0;n<64;n++){state.cooldowns[n].body=0;state.cooldowns[n].human=0;state.cooldowns[n].handle=0;state.cooldowns[n].receiver_handle=0;state.cooldowns[n].until=0;state.cooldowns[n].failed=0;}
   }
   /* Publish the complete fresh tuple only after validating all its members. */
   cfg[PLAYER]=player;cfg[GAME]=game;cfg[LEVEL]=level;cfg[CLIENT]=client;cfg[GATE]=gate;
@@ -316,7 +408,7 @@ void on_enter(GumInvocationContext*ic){Invocation*i=gum_invocation_context_get_l
   i->player=gum_invocation_context_get_nth_argument(ic,0);g_atomic_int_add(&state.inflight,1);
 }
 void on_leave(GumInvocationContext*ic){Invocation*i=gum_invocation_context_get_listener_invocation_data(ic,sizeof(Invocation));guint64 now,delta,qpc;
-  if(!stopped()){
+  if(!stopped()&&!state.limit_reached){
     if(g_atomic_int_add(&state.gate,1)==0){
       now=GetTickCount64();
       QueryPerformanceCounter((gint64*)&qpc);
@@ -337,7 +429,7 @@ void on_leave(GumInvocationContext*ic){Invocation*i=gum_invocation_context_get_l
 }
 void disable(void){g_atomic_int_add(&state.disabled,1);}
 guint state_size(void){return sizeof(State);}
-guint snapshot_size(void){return (64+64*16+64*5)*8;}
+guint snapshot_size(void){return (64+64*16+64*5+64*4)*8;}
 /* Snapshot copying uses the same nonblocking gate, so JS never reads partial events. */
 guint snapshot(guint64*out){guint i;guint64*s=out;
   if(g_atomic_int_add(&state.gate,1)!=0){g_atomic_int_add(&state.gate,-1);return 0;}
@@ -348,8 +440,8 @@ guint snapshot(guint64*out){guint i;guint64*s=out;
   s[16]=state.last_native_count;s[17]=state.last_cycle_reads;s[18]=state.status;s[19]=state.reason;s[20]=state.thread_id;
   s[21]=state.last_processed;s[22]=state.last_copied;s[23]=atomic_get(&state.disabled);s[24]=atomic_get(&state.inflight);
   s[25]=atomic_get(&state.selected);s[26]=atomic_get(&state.matching);s[27]=atomic_get(&state.ignored);s[28]=atomic_get(&state.contended);
-  s[29]=state.query_al;s[30]=state.dispatch_inflight;s[31]=250;s[32]=8;s[33]=4096;s[34]=8;s[35]=state.cooldown_pressure;s[36]=state.minimum_interval_qpc;s[37]=state.maximum_interval_qpc;s[38]=state.next_due_qpc;s[39]=runtime_config[10];
-  copy(s+64,state.events,64*16*8);copy(s+64+64*16,state.cadence,64*5*8);
+  s[29]=state.query_al;s[30]=state.dispatch_inflight;s[31]=250;s[32]=8;s[33]=4096;s[34]=8;s[35]=state.cooldown_pressure;s[36]=state.minimum_interval_qpc;s[37]=state.maximum_interval_qpc;s[38]=state.next_due_qpc;s[39]=runtime_config[10];s[40]=runtime_config[11];s[41]=runtime_config[12];s[42]=state.limit_reached;s[43]=state.ground_dispatches;s[44]=state.ground_completed;s[45]=state.ground_refused;
+  copy(s+64,state.events,64*16*8);copy(s+64+64*16,state.cadence,64*5*8);copy(s+64+64*16+64*5,state.event_extra,64*4*8);
   g_atomic_int_add(&state.gate,-1);return 1;
 }
 guint pending(void){return atomic_get(&state.gate)!=0;}

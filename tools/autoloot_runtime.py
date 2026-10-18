@@ -54,7 +54,8 @@ def static_proof():
     for name,module,rva in [('FindObjectsInRadius','engine',0xf3ab0),('RadiusImpl','engine',0xb812c0),
                              ('GetLevel','engine',0x82e3d0),('VectorDestructor','game',0x1731f0),
                              ('ContextCtor','game',0x1727890),('GetComponentImpl','engine',0x4515c0),
-                             ('GetAction','game',0xca1ac0),('CanUse','game',0xc88470),('PlayerDispatch','game',0x12d9aa0)]:
+                             ('GetAction','game',0xca1ac0),('CanUse','game',0xc88470),('PlayerDispatch','game',0x12d9aa0),
+                             ('GroundMessageWrapper','game',0x80cb40),('GroundItemTake','game',0x11944b0),('ProxyTargetThunk','game',0x24ec9b6)]:
         image=game if module=='game' else engine;offset=image.offset(rva)
         guards.append({'name':name,'module':module,'rva':rva,'hex':image.data[offset:offset+16].hex()})
     return {'function_guards':guards,'game_sha256':discovery.HASHES['game'],'engine_sha256':discovery.HASHES['engine'],
@@ -62,7 +63,8 @@ def static_proof():
             'interval_ms':250,'radius_metres':5,'page_size':8,'budget_ms_between_calls':8,'rpm_limit':4096}
 
 
-def prepare(session_path=None,duration=0,pid=None):
+def prepare(session_path=None,duration=0,pid=None,ground_items=False,max_dispatches=0,ground_only=False):
+    if type(max_dispatches) is not int or not 0<=max_dispatches<=1000000:raise ValueError('max_dispatches must be0..1000000')
     if frida.__version__!='17.24.0':raise ValueError('Reviewed Frida17.24.0 required')
     if not 0<=duration<=86400:raise ValueError('Duration must be0(resident)..86400s')
     static=static_proof()
@@ -78,7 +80,7 @@ def prepare(session_path=None,duration=0,pid=None):
       'module_name':game['name'],'module_path':game['path'],'module_base':game['base'],'module_size':game['size'],
       'game_instance':current['objects']['game']['address'],'player_instance':current['objects']['player']['address'],
       'prologues':[{**g,'module':'game'} for g in current['guarded_prologues']+current['discovery_prologues']]+static['function_guards']}
-    config['values']=[config['player_instance'],config['game_instance'],chain['game_global_slot'],game['base'],chain['level'],chain['client'],chain['player_gate'],engine['base'],'0','0','0']
+    config['values']=[config['player_instance'],config['game_instance'],chain['game_global_slot'],game['base'],chain['level'],chain['client'],chain['player_gate'],engine['base'],'0','0','0',str(int(bool(ground_items or ground_only))),str(max_dispatches),str(int(not ground_only))]
     return config,{'validated_session':current,'query':static,
       'javascript_sha256':hashlib.sha256(Path(__file__).with_suffix('.js').read_bytes()).hexdigest(),
       'lifecycle_contract':'Only successful normal QuickJS17.24 unload permits session detach; no manual CModule disposal'}
@@ -99,12 +101,14 @@ def dummy():
         report['stage']='load';bounded(script.load);rpc=script.exports_sync
         modes=['valid','continuous_arrivals','zero_count','near5','far','dirty','wrong_handle','forwarding','extra','mode','nested','null_manager',
           'wrong_owner','ambiguous','other_action','eligibility_false','no_progress','empty','pagination','concurrency',
-          'blocked_query','blocked_dispatch','blocked_dtor','slow_query','context_overflow','respawn','bounded_logs','cooldown_pressure']
+          'blocked_query','blocked_dispatch','blocked_dtor','slow_query','context_overflow','respawn','bounded_logs','cooldown_pressure',
+          'ground_valid','ground_swap','ground_swap_during_dispatch','ground_forward','ground_forward_448','ground_forward_458',
+          'ground_callback','ground_consumed','ground_blocked_dispatch','ground_continuous','ground_receiver_generation','ground_no_progress']
         for mode in modes:
             report['stage']='configure '+mode;rpc.configure(mode)
-            ticks=6 if mode=='slow_query' else 85 if mode in ('valid','continuous_arrivals','no_progress') else 80 if mode in ('bounded_logs','cooldown_pressure') else 35
+            ticks=6 if mode=='slow_query' else 85 if mode in ('valid','continuous_arrivals','no_progress','ground_continuous','ground_receiver_generation','ground_no_progress') else 80 if mode in ('bounded_logs','cooldown_pressure') else 35
             report['stage']='run '+mode;rpc.run(ticks,4 if mode=='concurrency' else 1,False);deadline=time.monotonic()+12
-            if mode.startswith('blocked_'):
+            if 'blocked_' in mode:
                 while not rpc.poll()['blocked']:
                     if time.monotonic()>deadline:raise TimeoutError('Native fixture did not block')
                     time.sleep(.005)
@@ -144,6 +148,16 @@ def dummy():
             if mode=='bounded_logs':assert v[13]>=64 and len(result['events'])==64,(mode,result)
             if mode=='cooldown_pressure':assert v[3]==64 and v[4]==0 and v[35]>0,(mode,result)
             if mode=='slow_query':assert all(b-a>=frequency*.320 for a,b in zip(qpc,qpc[1:])),(mode,result)
+            if mode.startswith('ground_'):
+                assert v[4]==0 and v[40]==1,(mode,result)
+                if mode in ('ground_continuous','ground_receiver_generation'):
+                    assert v[41]==0 and v[43]>=8 and v[44]==v[43] and v[42]==0,(mode,result)
+                elif mode=='ground_no_progress':assert v[41]==0 and v[43]==2 and v[44]==0 and v[0]>=4,(mode,result)
+                elif mode in ('ground_valid','ground_blocked_dispatch'):
+                    assert v[3]==1 and v[43]==1 and v[44]==1 and v[42]==1 and stats[15]==1,(mode,result)
+                elif mode=='ground_swap_during_dispatch':
+                    assert v[3]==1 and v[42]==1 and v[44]==0 and stats[15]==0,(mode,result)
+                else:assert v[3]==0 and stats[15]==0,(mode,result)
             report['cases'].append({'name':mode,'passed':True,'clock':'accelerated_tick_and_qpc' if mode in ('bounded_logs','cooldown_pressure') else 'real_windows_clocks',
               'result':result,'cleanup':stop,'qpc_intervals_ms':[(b-a)/frequency*1000 for a,b in zip(qpc,qpc[1:])]})
         bounded(script.unload);report['script_unloaded']=True;bounded(session.detach);session=None;report['session_detached']=True
@@ -245,7 +259,7 @@ def _live(args):
         api=discovery.api_setup();pids=discovery.process_ids(api)
         if not pids or (getattr(args,'pid',None) is not None and args.pid not in pids):
             report['game_closed']=True;status('game_closed',False,False,'Le jeu est fermé');raise _StopRequested()
-        config,proof=prepare(getattr(args,'session',None),args.duration,getattr(args,'pid',None));report['preflight']=proof
+        config,proof=prepare(getattr(args,'session',None),args.duration,getattr(args,'pid',None),getattr(args,'ground_items',False),getattr(args,'max_dispatches',0),getattr(args,'ground_only',False));report['preflight']=proof
         if stop_path.exists():report['stop_before_setup']=True;raise _StopRequested()
         raw=Path(__file__).with_suffix('.c').read_bytes()
         if hashlib.sha256(raw).hexdigest()!=proof['query']['core_sha256']:raise ValueError('Core changed after preflight')
@@ -271,6 +285,8 @@ def _live(args):
                 report['result']=value['result']
                 if value['result'].get('stats',{}).get('disabled',0)>0:
                     report['errors'].append('Native runtime disabled itself; stopping after a guard/canary fault');break
+                if value['result'].get('stats',{}).get('dispatch_limit_reached',0)>0:
+                    report['dispatch_limit_reached']=True;break
                 if not status('active',True,True,'AutoLoot actif'):
                     report['errors'].append('Status publication failed; stopping cooperatively');break
                 save()
@@ -347,6 +363,9 @@ def main():
     parser.add_argument('--duration',type=float,default=0)
     parser.add_argument('--pid',type=int)
     parser.add_argument('--launch-token',default=None)
+    parser.add_argument('--ground-only',action='store_true',help=argparse.SUPPRESS)
+    parser.add_argument('--ground-items',action='store_true',help='Experimental standard ground Take1 route, in addition to corpses')
+    parser.add_argument('--max-dispatches',type=int,default=0,help='Global native dispatch cap;0 means unlimited')
     parser.add_argument('--status',type=Path,default=ROOT/'evidence/autoloot5m/status.json')
     parser.add_argument('--stop-file',type=Path,default=ROOT/'evidence/autoloot5m/stop.request')
     parser.add_argument('--output',type=Path,default=ROOT/'evidence/autoloot5m/runtime-report.json')
@@ -356,7 +375,7 @@ def main():
         print(json.dumps({'static_only':True,'process_opened':False,'proof':static_proof()}));return 0
     if not 0<=args.duration<=86400:parser.error('duration must be0..86400s')
     if args.preflight_only:
-        config,proof=prepare(args.session,args.duration,args.pid)
+        config,proof=prepare(args.session,args.duration,args.pid,args.ground_items,args.max_dispatches,args.ground_only)
         print(json.dumps({'preflight_ok':True,'frida_attached':False,'output_written':False,'config':config,
                           'core_sha256':proof['query']['core_sha256']}));return 0
     return live(args)

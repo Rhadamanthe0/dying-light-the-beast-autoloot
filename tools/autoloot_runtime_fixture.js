@@ -26,7 +26,7 @@ gpointer resolve(gpointer pool,guint64 handle){stats[2]++;
 }
 gint select(gpointer component,gpointer ctx){guint64 h;stats[4]++;
  if((guint64)ctx!=cfg[14]||((guint64)component!=cfg[9]&&(guint64)component!=cfg[28]))stats[5]++;
- h=*(guint64*)(*(guint64*)((guint8*)component+0x598)+0x28);*(guint*)(h+0x239c)=123;block(2);return load(controls+3);
+ if(!load(controls+5)){h=*(guint64*)(*(guint64*)((guint8*)component+0x598)+0x28);*(guint*)(h+0x239c)=123;}block(2);return load(controls+3);
 }
 guint8 eligibility(gpointer component,gint action,gpointer ctx){stats[6]++;
  if(action!=1||(guint64)ctx!=cfg[14]||((guint64)component!=cfg[9]&&(guint64)component!=cfg[28]))stats[7]++;
@@ -35,6 +35,11 @@ guint8 eligibility(gpointer component,gint action,gpointer ctx){stats[6]++;
 guint8 dispatch(gpointer player,guint64 handle,gpointer ctx){guint64 component,human,body;stats[8]++;
  if((guint64)player!=cfg[0]||(guint64)ctx!=cfg[14]||*(guint64*)ctx!=cfg[0]+0x1b0||((guint8*)ctx)[0x18]!=0x20)stats[9]++;
  if(handle==cfg[13])component=cfg[9];else if(handle==cfg[27])component=cfg[28];else{stats[9]++;return 0;}
+ if(load(controls+5)){
+   body=component==cfg[9]?cfg[7]:cfg[26];block(3);
+   if(load(controls+4)==10)return 0; /* Internal re-selection changedTake1 toSwap24: vanilla rejects. */
+   if(load(controls+4)!=3)*(guint8*)(body+0x4f0)|=1;stats[15]++;return 1;
+ }
  human=*(guint64*)(*(guint64*)(component+0x598)+0x28);body=*(guint64*)(human+0x2558);
  block(3);if(load(controls+4)!=3&&load(controls+4)!=8){*(guint*)(body+0x4d0)=0;*(guint*)(body+0x388)=5;}return 1;
 }
@@ -54,6 +59,14 @@ void destroy(gpointer vector){guint64*v=vector;stats[14]++;
  v[0]=((guint64)vector+8)&0xffffffffffffULL;*(guint16*)((guint8*)vector+6)=0x0101;block(6);
 }
 guint64 tick(gpointer player,guint64 value,guint64 depth){
+ if(load(controls+5)&&(load(controls+4)==7||load(controls+4)==11)){
+   guint k;for(k=0;k<2;k++){
+     guint64 body=k?cfg[26]:cfg[7],component=k?cfg[28]:cfg[9],proxy=*(guint64*)(body+0x38);
+     guint64 node=*(guint64*)(component+0x78),entity=*(guint64*)(proxy+0x10),handles=*(guint64*)(entity+0x78)&0xffffffffffffULL;
+     *(guint64*)(proxy+8)+=1ULL<<44;*(guint64*)(node+8)=*(guint64*)(proxy+8);*(guint64*)(handles+8)=*(guint64*)(proxy+8);
+     *(guint8*)(body+0x4f0)&=0xfe;
+   }
+ }
  if(load(controls+4)==7||load(controls+4)==8){
    /* New full generation each natural tick, same valid allocation slot. */
    cfg[13]+=1ULL<<44;cfg[27]+=1ULL<<44;
@@ -77,14 +90,14 @@ const cm=new CModule(coreSource,{runtime_config:runtimeConfig,cfg:bindingCfg,sta
  player_dispatch:fixture.dispatch,find_radius:fixture.query,vector_destroy:fixture.destroy});
 const disable=new NativeFunction(cm.disable,'void',[]),pending=new NativeFunction(cm.pending,'uint',[]),snap=new NativeFunction(cm.snapshot,'uint',['pointer']);
 const size=new NativeFunction(cm.state_size,'uint',[])(),snapSize=new NativeFunction(cm.snapshot_size,'uint',[])();
-if(size>32768||snapSize!==11264)throw new Error('Unexpected runtime layout');
+if(size>32768||snapSize!==13312)throw new Error('Unexpected runtime layout');
 const snapBuffer=Memory.alloc(snapSize),createThread=new NativeFunction(address('CreateThread'),'pointer',['pointer','size_t','pointer','pointer','uint','pointer']);
 const wait=new NativeFunction(address('WaitForSingleObject'),'uint',['pointer','uint']),close=new NativeFunction(address('CloseHandle'),'bool',['pointer']);
 const image=Memory.alloc(0x3707000),player=Memory.alloc(0x4000),player2=Memory.alloc(0x4000),game=Memory.alloc(0x200),level=Memory.alloc(0xf00),client=Memory.alloc(0x100);
 const pool=Memory.alloc(16),storage=Memory.alloc(0x8000),gameSlot=Memory.alloc(8),entityLevel=Memory.alloc(0x80),levelHost=Memory.alloc(0x700),ilevel=Memory.alloc(8),typeObj=Memory.alloc(8),rtti=Memory.alloc(8);
 const vectorBlock=Memory.alloc(64),vector=vectorBlock.add(31).and(ptr('0xfffffffffffffff0')),ctxBlock=Memory.alloc(96),ctx=ctxBlock.add(31).and(ptr('0xfffffffffffffff0'));
 const qpfOut=Memory.alloc(8);if(!new NativeFunction(address('QueryPerformanceFrequency'),'bool',['pointer'])(qpfOut))throw new Error('QPF unavailable');
-const frequency=qpfOut.readU64().toNumber();const sources=[],matrices=[];
+const frequency=qpfOut.readU64().toNumber();const sources=[],matrices=[],groundMeta=[];
 function q(a,b){a.writePointer(b);}function n(a,b){a.writeU64(uint64(b.toString()));}
 function transform(object,x){const obj=Memory.alloc(0x150),t=Memory.alloc(0x30),page=Memory.alloc(0x90),matrix=Memory.alloc(48),flags=Memory.alloc(1);
  q(object.add(0x18),obj);q(obj.add(0x148),t);q(t.add(0x20),page);t.add(0x28).writeU32(0);
@@ -93,6 +106,7 @@ function transform(object,x){const obj=Memory.alloc(0x150),t=Memory.alloc(0x30),
 transform(player,0);transform(player2,0);
 for(let i=0;i<2;i++){const s={body:Memory.alloc(0x620),human:Memory.alloc(0x2870),entity:Memory.alloc(0x90),strategy:Memory.alloc(0x40),manager:Memory.alloc(8),handles:Memory.alloc(16),
  component:storage.add(i*0x4000+0x180),handle:uint64('0x52e1c4f400000018').add(i*0x400)};sources.push(s);transform(s.body,2+i);}
+for(let i=0;i<2;i++)groundMeta.push({proxy:storage.add(i*0x4000+0x780),handle:sources[i].handle.add(0x60),node:Memory.alloc(24),table:Memory.alloc(24),records:Memory.alloc(72)});
 function initialize(mode){
  state.writeByteArray(new Uint8Array(32768));bindingCfg.writeByteArray(new Uint8Array(256));cfg.writeByteArray(new Uint8Array(256));runtimeConfig.writeByteArray(new Uint8Array(128));fixtureStats.writeByteArray(new Uint8Array(128));controls.writeByteArray(new Uint8Array(32));controls.add(12).writeS32(1);
  q(gameSlot,game);q(game,image.add(0x259fe08));q(game.add(0x138),level);q(level.add(0xec8),client);q(client.add(0x88),client);q(client.add(0x90),player);
@@ -111,7 +125,7 @@ function initialize(mode){
  matrices.forEach(m=>m.flags.writeU8(4));matrices[2].matrix.add(12).writeFloat(2);matrices[3].matrix.add(12).writeFloat(3);
  ctx.sub(16).writeByteArray(new Uint8Array(16).fill(0xa5));ctx.writeByteArray(new Uint8Array(48));ctx.add(48).writeByteArray(new Uint8Array(16).fill(0x5a));vector.sub(16).writeByteArray(new Uint8Array(16).fill(0xa5));vector.writeByteArray(new Uint8Array(16));vector.add(16).writeByteArray(new Uint8Array(16).fill(0x5a));
  const s=sources[0],t=sources[1];[player,game,gameSlot,image,level,client,client,s.body,s.human,s.component,s.strategy,s.manager,image.add(0x37069b0),s.handle,ctx,0,pool,storage,s.entity,s.handles,s.handles,1,0,2,1,5000,t.body,t.handle,t.component,ilevel,typeObj,t.handles].forEach((v,i)=>n(cfg.add(i*8),v));
- [player,game,gameSlot,image,level,client,client,image,vector,ctx,frequency].forEach((v,i)=>n(runtimeConfig.add(i*8),v));
+ [player,game,gameSlot,image,level,client,client,image,vector,ctx,frequency,0,0,1].forEach((v,i)=>n(runtimeConfig.add(i*8),v));
  if(mode==='far')matrices[2].matrix.add(12).writeFloat(5.1);if(mode==='near5')matrices[2].matrix.add(12).writeFloat(5);
  if(mode==='dirty')matrices[2].flags.writeU8(6);if(mode==='wrong_handle')n(s.component.add(8),s.handle.add(1));
  if(mode==='forwarding')n(s.component.add(0x450),1);if(mode==='extra')q(s.human.add(0x2858),s.body);
@@ -125,6 +139,33 @@ function initialize(mode){
  if(mode==='blocked_query')controls.writeS32(5);if(mode==='blocked_dispatch')controls.writeS32(3);if(mode==='blocked_dtor')controls.writeS32(6);
  if(mode==='bounded_logs'){controls.add(28).writeS32(1);controls.add(12).writeS32(0x17);}
  if(mode==='ambiguous'){n(s.handles.add(8),s.handle);s.entity.add(0x80).writeU32(2);}
+
+ if(mode.startsWith('ground_')){
+  controls.add(20).writeS32(1);n(runtimeConfig.add(11*8),1);n(runtimeConfig.add(12*8),1);n(runtimeConfig.add(13*8),0);
+  image.add(0x2d326f8+0x128).writePointer(image.add(0x24ec9b6));image.add(0x257b948).writePointer(image.add(0xfba70));image.add(0x27ecee0+8).writePointer(image.add(0x80cb40));
+  for(let i=0;i<2;i++){const a=sources[i],m=groundMeta[i],pg=storage.add(i*0x4000);
+   q(a.body,image.add(0x29ec228));q(a.body.add(0x10),image.add(0x29ec8f0));q(a.body.add(0x20),image.add(0x29ecbc8));q(a.body.add(0x38),m.proxy);
+   q(m.proxy,image.add(0x2d326f8));n(m.proxy.add(8),m.handle);q(m.proxy.add(0x10),a.entity);q(m.proxy.add(0x48),a.body.add(0x20));
+   pg.add(0x2e).writeU16(2000);n(pg.add(0x110),1<<16);
+   n(a.handles,a.handle);n(a.handles.add(8),m.handle);a.entity.add(0x80).writeU32(2);
+   q(a.component.add(0x598),NULL);q(a.component.add(0x70),image.add(0x27ecf30));q(a.component.add(0x78),m.node);
+   q(m.node,NULL);n(m.node.add(8),m.handle);q(m.node.add(0x10),a.body.add(0x270));
+   q(a.body.add(0x270),image.add(0x27ecee0));q(a.body.add(0x278),m.table);q(a.body.add(0x280),a.body.add(0x268));a.body.add(0x2a0).writeU8(0);a.body.add(0x4f0).writeU8(0);
+   n(m.table.add(8),m.records);m.table.add(0x10).writeU32(3);
+   [['0x53139e0185c9a12f',0x16e8c20],['0xcbbfaec882b2a3ea',0x16e9040],['0x5f2b7eb72fee8475',0x16e8cd0]].forEach(([guid,rva],j)=>{n(m.records.add(j*24),uint64(guid));q(m.records.add(j*24+8),image.add(rva));m.records.add(j*24+16).writeS32(0x20);});
+  }
+  if(mode==='ground_swap')controls.add(12).writeS32(24);
+  if(mode==='ground_swap_during_dispatch')controls.add(16).writeS32(10);
+  if(mode==='ground_forward')sources.forEach(a=>a.body.add(0x2a0).writeU8(1));
+  if(mode==='ground_callback')groundMeta.forEach(m=>m.records.add(2*24+8).writePointer(image.add(0x16e8cd1)));
+  if(mode==='ground_consumed')sources.forEach(a=>a.body.add(0x4f0).writeU8(1));
+  if(mode==='ground_forward_448')sources.forEach(a=>n(a.component.add(0x448),0));
+  if(mode==='ground_forward_458')sources.forEach(a=>n(a.component.add(0x458),1));
+  if(mode==='ground_blocked_dispatch')controls.writeS32(3);
+  if(mode==='ground_continuous'){n(runtimeConfig.add(12*8),0);controls.add(16).writeS32(7);}
+  if(mode==='ground_receiver_generation'){n(runtimeConfig.add(12*8),0);controls.add(16).writeS32(11);}
+  if(mode==='ground_no_progress'){n(runtimeConfig.add(12*8),0);controls.add(16).writeS32(3);}
+ }
 }
 // Wrapper sets/checks Win64 callee-saved GPR and SIMD canaries and preserves RAX.
 const registerFailures=Memory.alloc(4),wrapper=Memory.alloc(Process.pageSize);
@@ -145,11 +186,11 @@ q(tickAddress,wrapper);
 
 const original=Array.from(new Uint8Array(fixture.tick.readByteArray(16)));let listener=null,handles=[],workers=[],joined=true;
 function allJoined(){if(handles.some(h=>wait(h,0)!==0))return false;handles.forEach(h=>close(h));handles=[];joined=true;return true;}
-function snapshot(){const okay=snap(snapBuffer)!==0;return {snapshot_available:okay,values:okay?Array.from({length:40},(_,i)=>snapBuffer.add(i*8).readU64().toString()):[],
+function snapshot(){const okay=snap(snapBuffer)!==0;return {snapshot_available:okay,values:okay?Array.from({length:46},(_,i)=>snapBuffer.add(i*8).readU64().toString()):[],
  events:okay?Array.from({length:Math.min(snapBuffer.add(13*8).readU64().toNumber(),64)},(_,i)=>Array.from({length:16},(_,j)=>snapBuffer.add((64+i*16+j)*8).readU64().toString())):[],
  cadence:okay?Array.from({length:Math.min(snapBuffer.add(15*8).readU64().toNumber(),64)},(_,i)=>Array.from({length:5},(_,j)=>snapBuffer.add((64+64*16+i*5+j)*8).readU64().toString())):[],
- stats:Array.from({length:15},(_,i)=>fixtureStats.add(i*8).readU64().toNumber()),blocked:controls.add(4).readS32(),
- register_failures:registerFailures.readU32(),body_states:sources.map(s=>({count:s.body.add(0x4d0).readU32(),state:s.body.add(0x388).readU32()}))};}
+ stats:Array.from({length:16},(_,i)=>fixtureStats.add(i*8).readU64().toNumber()),blocked:controls.add(4).readS32(),
+ register_failures:registerFailures.readU32(),event_extra:okay?Array.from({length:64},(_,i)=>Array.from({length:4},(_,j)=>snapBuffer.add((64+64*16+64*5+i*4+j)*8).readU64().toString())):[],body_states:sources.map(s=>({count:s.body.add(0x4d0).readU32(),state:s.body.add(0x388).readU32(),flags:s.body.add(0x4f0).readU8()}))};}
 rpc.exports={configure(mode){if(listener||!joined)throw new Error('Must be idle');initialize(mode);registerFailures.writeU32(0);listener=Interceptor.attach(fixture.tick,{onEnter:cm.on_enter,onLeave:cm.on_leave});Interceptor.flush();return {state_size:size,snapshot_size:snapSize};},
  run(count,threads,secondPlayer){joined=false;workers=[];handles=[];for(let i=0;i<threads;i++){const a=Memory.alloc(40);q(a,secondPlayer?player2:player);a.add(8).writeU32(count);workers.push(a);const h=createThread(NULL,0,fixture.worker,a,0,NULL);if(h.isNull())throw new Error('Thread failed');handles.push(h);}return true;},
  respawn(){q(client.add(0x90),player2);n(cfg,player2);sources.forEach(s=>{s.body.add(0x4d0).writeU32(2);s.body.add(0x388).writeU32(1);});return true;},
