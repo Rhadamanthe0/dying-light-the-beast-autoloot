@@ -7,7 +7,9 @@ permissions:
   contents: read
 jobs:
   windows:
-    runs-on: windows-latest
+    # Skip external fork PRs before a private runner can be selected.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, Windows, X64, minipc, ephemeral, autoloot, "rhada-run-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
