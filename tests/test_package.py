@@ -8,7 +8,8 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 RUNTIME_FILES=('autoloot_runtime.py','autoloot_runtime.c','autoloot_runtime.js',
                'autoloot_runtime_fixture.js','autoloot_runtime_fixture.py','discover_session.py','inspect_native.py',
-               'observe_runtime.py','game_paths.py','runtime_control.py','autoloot_watch.py')
+               'observe_runtime.py','game_paths.py','runtime_control.py','autoloot_watch.py',
+               'runtime_paths.py','control.py')
 
 class PackageTests(unittest.TestCase):
     def test_runtime_inputs_present(self):

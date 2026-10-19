@@ -1,0 +1,147 @@
+name: Build and publish installer
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build (for example v1.1.0)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: installer-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      source_sha: ${{ steps.version.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          architecture: x64
+      - name: Use canonical temporary paths
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+      - name: Validate release version
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_TAG -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Expected a vMAJOR.MINOR.PATCH tag' }
+          $version = python -c "import runpy; print(runpy.run_path('tools/build_installer.py')['VERSION'])"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read builder version' }
+          if ($env:RELEASE_TAG -cne ('v' + $version)) { throw 'Tag does not match the tagged builder version' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "source_sha=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create the build environment' }
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+      - name: Regression tests
+        run: .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+      - name: Install pinned build compiler
+        shell: pwsh
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.3.exe'
+          Invoke-WebRequest -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' -OutFile $setup
+          $expected = '9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732'
+          if ((Get-FileHash -LiteralPath $setup).Hash.ToLowerInvariant() -ne $expected) { throw 'Compiler SHA256 mismatch' }
+          $signature = Get-AuthenticodeSignature -LiteralPath $setup
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike '*Pyrsys B.V.*') { throw 'Compiler signature invalid' }
+          $directory = Join-Path $env:RUNNER_TEMP 'InnoSetup'
+          $process = Start-Process -FilePath $setup -ArgumentList @('/CURRENTUSER', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOICONS', ('/DIR="' + $directory + '"')) -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Compiler installation failed' }
+          "AUTOLOOT_ISCC=$(Join-Path $directory 'ISCC.exe')" >> $env:GITHUB_ENV
+      - name: Build and qualify standalone installer
+        run: .\.venv\Scripts\python.exe tools/build_installer.py --iscc "$env:AUTOLOOT_ISCC"
+      - name: Create checksum
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $name = 'BetterAutoLoot-Setup-' + $env:VERSION + '.exe'
+          $path = Join-Path 'dist' $name
+          $hash = (Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant()
+          ($hash + '  ' + $name) | Set-Content -LiteralPath ($path + '.sha256') -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: |
+            dist/*.exe
+            dist/*.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Keep build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics
+          path: .build/reports/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.build.outputs.version }}
+      SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer
+          path: dist
+      - name: Verify artifact and source tag
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          repo, tag = os.environ['GH_REPO'], os.environ['RELEASE_TAG']
+          def api(path):
+              return json.loads(subprocess.check_output(['gh', 'api', path], text=True))
+          obj = api(f'repos/{repo}/git/ref/tags/{tag}')['object']
+          for _ in range(8):
+              if obj['type'] == 'commit':
+                  break
+              if obj['type'] != 'tag':
+                  raise RuntimeError('Tag does not identify a commit')
+              obj = api(f'repos/{repo}/git/tags/{obj["sha"]}')['object']
+          if obj['type'] != 'commit' or obj['sha'] != os.environ['SOURCE_SHA']:
+              raise RuntimeError('Tag changed after the build; refusing publication')
+          name = 'BetterAutoLoot-Setup-' + os.environ['VERSION'] + '.exe'
+          folder = pathlib.Path('dist')
+          if sorted(p.name for p in folder.iterdir()) != sorted([name, name + '.sha256']):
+              raise RuntimeError('Unexpected release files')
+          expected, checksum_name = (folder / (name + '.sha256')).read_text().strip().split()
+          actual = hashlib.sha256((folder / name).read_bytes()).hexdigest()
+          if checksum_name != name or actual != expected:
+              raise RuntimeError('Installer checksum mismatch')
+          PY
+      - name: Attach GitHub-built installer to release
+        shell: bash
+        run: |
+          if ! gh release view "$RELEASE_TAG" --repo "$GH_REPO" > /dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --repo "$GH_REPO" --verify-tag --title "Better AutoLoot $VERSION" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" "dist/BetterAutoLoot-Setup-$VERSION.exe" "dist/BetterAutoLoot-Setup-$VERSION.exe.sha256" --repo "$GH_REPO" --clobber
+          echo "Installer built from $SOURCE_SHA and published to $GITHUB_SERVER_URL/$GH_REPO/releases/tag/$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
