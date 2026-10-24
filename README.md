@@ -38,4 +38,6 @@ Logs are in the installed folder: `evidence\Configure-AutoLoot.log` for setup an
 <summary>Publishing releases</summary>
 
 Update `VERSION` in `tools/build_installer.py`, commit, and push the matching `vMAJOR.MINOR.PATCH` tag. GitHub builds, tests and publishes the installer automatically. **Actions → Build and publish installer → Run workflow** rebuilds an existing tag.
+
+All workflows run on GitHub-hosted runners (`windows-latest` for the Windows jobs, `ubuntu-latest` for publication).
 </details>
