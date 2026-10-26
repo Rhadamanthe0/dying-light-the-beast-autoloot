@@ -4,6 +4,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# Un nouveau push annule la validation dépassée de la même PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   windows:
     runs-on: windows-latest
