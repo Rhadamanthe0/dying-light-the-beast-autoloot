@@ -8,13 +8,24 @@ const fixtureSource=`
 #include <glib.h>
 extern guint64 cfg[32],runtime_config[16],stats[16],diag_counts[8],diag_qpc;extern volatile gint controls[8],diag[8];extern gpointer tick_address;
 extern void Sleep(guint);extern guint GetCurrentThreadId(void);extern guint64 GetTickCount64(void);extern gboolean QueryPerformanceCounter(gint64*);
+extern gboolean ReadProcessMemory(gpointer,gconstpointer,gpointer,gsize,gsize*);
 extern gpointer GetProcessHeap(void);extern gpointer HeapAlloc(gpointer,guint,gsize);extern gboolean HeapFree(gpointer,guint,gpointer);
 typedef guint64(*Tick)(gpointer,guint64,guint64);
 typedef struct {gpointer player;guint count,pad;guint64 failures,done,thread_id;} Worker;
 static gint load(volatile gint*p){return g_atomic_int_add(p,0);}
 static void block(gint point){if(load(controls)==point){g_atomic_int_add(controls+1,1);while(!load(controls+2))Sleep(1);}}
-guint64 clock_now(void){return GetTickCount64()+(guint64)load(controls+6);}
+/* Progression cases move time only at the native boundary under test. */
+static gboolean progression_clock(void){gint mode=load(controls+4);return mode>=14&&mode<=19;}
+static void exceed_budget(void){diag_qpc+=(runtime_config[10]*9+999)/1000;}
+gboolean read_memory(gpointer process,gconstpointer from,gpointer to,gsize size,gsize*got){gboolean okay;
+ if(progression_clock()&&(guint64)from==0x12345000){*got=0;return FALSE;}
+ okay=ReadProcessMemory(process,from,to,size,got);
+ if(load(controls+4)==15&&(guint64)from==cfg[7]+0x5f0)exceed_budget();return okay;
+}
+guint64 clock_now(void){if(progression_clock())return 1000+(guint64)load(controls+6)+diag_qpc*1000/runtime_config[10];
+ return GetTickCount64()+(guint64)load(controls+6);}
 gboolean clock_qpc(gint64*out){gboolean okay=QueryPerformanceCounter(out);guint8*v=(gpointer)runtime_config[8];
+ if(progression_clock()){*out=(1000+(guint64)load(controls+6))*runtime_config[10]/1000+diag_qpc;return okay;}
  if(load(diag+5)){*out=(gint64)diag_qpc;return okay;}
  *out+=(gint64)load(controls+6)*(gint64)runtime_config[10]/1000;
  /* Deterministic fixture only: checkpoint's QPC call follows vector initialization.
@@ -39,6 +50,7 @@ gint select(gpointer component,gpointer ctx){guint64 h;stats[4]++;
  if((guint64)ctx!=cfg[14]||((guint64)component!=cfg[9]&&(guint64)component!=cfg[28]))stats[5]++;
  if(!load(controls+5)){h=*(guint64*)(*(guint64*)((guint8*)component+0x598)+0x28);*(guint*)(h+0x239c)=123;}
  if(load(controls+4)==13){guint64 matrix=(guint64)component==cfg[9]?cfg[15]:cfg[23];*(float*)(matrix+12)=2.01f;}
+ if(load(controls+4)==16&&(guint64)component==cfg[9])exceed_budget();
  block(2);return load(controls+3);
 }
 guint8 eligibility(gpointer component,gint action,gpointer ctx){stats[6]++;
@@ -54,16 +66,19 @@ guint8 dispatch(gpointer player,guint64 handle,gpointer ctx){guint64 component,h
    if(load(controls+4)!=3){if(load(controls+5)==2){*(guint*)(body+0x4d0)=0;*(guint*)(body+0x388)=5;}else *(guint8*)(body+0x4f0)|=1;}stats[15]++;return 1;
  }
  human=*(guint64*)(*(guint64*)(component+0x598)+0x28);body=*(guint64*)(human+0x2558);
- block(3);if(load(controls+4)!=3&&load(controls+4)!=8){*(guint*)(body+0x4d0)=0;*(guint*)(body+0x388)=5;}return 1;
+ block(3);if(load(controls+4)!=3&&load(controls+4)!=8){*(guint*)(body+0x4d0)=0;*(guint*)(body+0x388)=5;}
+ if(load(controls+4)==19&&component==cfg[9])exceed_budget();return 1;
 }
 guint8 query(gpointer level,gpointer vector,gpointer centre,float radius,gpointer type,guint8 flag,gpointer optional){
  guint64*v=vector,*data;guint n=2,i;float*c=centre;stats[10]++;if(diag_counts[5])diag_counts[4]++;diag_counts[0]++;diag_counts[5]=1;
  if((guint64)level!=cfg[29]||(guint64)type!=cfg[30]||radius!=2.0f||flag||optional||
     c[0]!=0||c[1]!=0||c[2]!=0||(v[0]&0xffffffffffffULL)!=(guint64)((guint8*)vector+8)||*(guint16*)((guint8*)vector+6)!=0x0101)stats[11]++;
  block(5);if(load(controls+4)==4)Sleep(320);
- if(load(controls+4)==5)n=0;if(load(controls+4)==6)n=18;
+ if(load(controls+4)==5)n=0;if(load(controls+4)==6)n=18;if(load(controls+4)==18)n=10;
  if(n){data=HeapAlloc(GetProcessHeap(),0,n*8);stats[12]++;
    for(i=0;i<n;i++)data[i]=i&1?cfg[26]+0x10:cfg[7]+0x10;
+   if(load(controls+4)==14)data[0]=0x12345010;
+   if(load(controls+4)==18){for(i=0;i<8;i++)data[i]=0;data[8]=0x12345010;data[9]=cfg[26]+0x10;}
    v[0]=(guint64)data&0xffffffffffffULL;((guint*)vector)[2]=n;((guint*)vector)[3]=n;
  }return 0x81;
 }
@@ -72,6 +87,7 @@ void destroy(gpointer vector){guint64*v=vector;stats[14]++;
  if((v[0]&0xffffffffffffULL)!=(guint64)((guint8*)vector+8)||*(guint16*)((guint8*)vector+6)!=0x0101)diag_counts[3]++;}
  if(!((guint8*)vector)[7]){if(!HeapFree(GetProcessHeap(),0,(gpointer)(v[0]&0xffffffffffffULL)))stats[11]++;else stats[13]++;}
  v[0]=((guint64)vector+8)&0xffffffffffffULL;*(guint16*)((guint8*)vector+6)=0x0101;block(6);
+ if(load(controls+4)==17&&!load(diag+7)){exceed_budget();g_atomic_int_add(diag+7,1);}
 }
 guint64 tick(gpointer player,guint64 value,guint64 depth){
  if(load(diag+6)&&(guint64)player!=cfg[0]&&load(diag)){g_atomic_int_add(diag+2,1);while(!load(diag+3))Sleep(1);}
@@ -99,8 +115,8 @@ guint worker(gpointer a){Worker*w=a;guint i;w->thread_id=GetCurrentThreadId();
 `;
 const fixture=new CModule(fixtureSource,{cfg,runtime_config:runtimeConfig,stats:fixtureStats,controls,tick_address:tickAddress,diag,diag_counts:diagCounts,diag_qpc:diagQpc,
  Sleep:address('Sleep'),GetCurrentThreadId:address('GetCurrentThreadId'),GetTickCount64:address('GetTickCount64'),
- QueryPerformanceCounter:address('QueryPerformanceCounter'),GetProcessHeap:address('GetProcessHeap'),HeapAlloc:address('HeapAlloc'),HeapFree:address('HeapFree')});
-const cm=new CModule(coreSource,{runtime_config:runtimeConfig,cfg:bindingCfg,state,ReadProcessMemory:address('ReadProcessMemory'),
+ QueryPerformanceCounter:address('QueryPerformanceCounter'),ReadProcessMemory:address('ReadProcessMemory'),GetProcessHeap:address('GetProcessHeap'),HeapAlloc:address('HeapAlloc'),HeapFree:address('HeapFree')});
+const cm=new CModule(coreSource,{runtime_config:runtimeConfig,cfg:bindingCfg,state,ReadProcessMemory:fixture.read_memory,
  GetTickCount64:fixture.clock_now,GetCurrentThreadId:address('GetCurrentThreadId'),QueryPerformanceCounter:fixture.clock_qpc,
  context_ctor:fixture.ctor,get_component:fixture.resolve,select_action:fixture.select,can_use:fixture.eligibility,
  player_dispatch:fixture.dispatch,find_radius:fixture.query,vector_destroy:fixture.destroy});
@@ -156,6 +172,8 @@ function initialize(mode){
  if(mode==='context_overflow')controls.add(16).writeS32(9);if(mode==='other_action')controls.add(12).writeS32(0x17);
  if(mode==='blocked_query')controls.writeS32(5);if(mode==='blocked_dispatch')controls.writeS32(3);if(mode==='blocked_dtor')controls.writeS32(6);
  if(mode==='bounded_logs'){controls.add(28).writeS32(1);controls.add(12).writeS32(0x17);}
+ const progressionMode=['unreadable_first','slow_bind_first','slow_action_first','budget_before_candidate','tail_rotation','budget_after_dispatch'].indexOf(mode);
+ if(progressionMode>=0){controls.add(16).writeS32(14+progressionMode);controls.add(28).writeS32(1);n(runtimeConfig.add(80),1000000);}
  if(mode==='ambiguous'){n(s.handles.add(8),s.handle);s.entity.add(0x80).writeU32(2);}
 
  if(mode.startsWith('ground_')||mode.startsWith('container_')){
