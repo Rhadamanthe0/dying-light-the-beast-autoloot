@@ -108,7 +108,9 @@ def dummy():
           'ground_callback','ground_consumed','ground_blocked_dispatch','ground_continuous','ground_receiver_generation','ground_no_progress',
           'container_valid','container_wrong_state','container_other_action','container_flag','container_mode','container_nested','container_forward','container_iloot',
           'container_context','container_blocked_dispatch','container_blocked_select','container_no_progress','container_disabled','container_complex_layout',
-          'body_near2','body_far2','body_range_changed','ground_near2','ground_far2','ground_range_changed','container_near2','container_far2','container_range_changed','prequery_concurrency']
+          'body_near2','body_far2','body_range_changed','ground_near2','ground_far2','ground_range_changed','container_near2','container_far2','container_range_changed','prequery_concurrency',
+          'unreadable_first','slow_bind_first','slow_action_first','budget_before_candidate','tail_rotation','budget_after_dispatch']
+        progression_modes={'unreadable_first','slow_bind_first','slow_action_first','budget_before_candidate','tail_rotation','budget_after_dispatch'}
         for mode in modes:
             report['stage']='configure '+mode;rpc.configure(mode)
             ticks=6 if mode=='slow_query' else 85 if mode in ('valid','continuous_arrivals','no_progress','ground_continuous','ground_receiver_generation','ground_no_progress','container_no_progress') else 80 if mode in ('bounded_logs','cooldown_pressure') else 35
@@ -126,7 +128,7 @@ def dummy():
                 rpc.releaseclock();until(lambda r:r['workers'][0]['done']==1)
                 report['prequery_foreign_inflight']=rpc.poll()
                 rpc.releasesecond()
-            else:rpc.run(ticks,4 if mode=='concurrency' else 1,False)
+            else:rpc.run(1 if mode in progression_modes else ticks,4 if mode=='concurrency' else 1,False)
             if 'blocked_' in mode:
                 while not rpc.poll()['blocked']:
                     if time.monotonic()>deadline:raise TimeoutError('Native fixture did not block')
@@ -137,6 +139,14 @@ def dummy():
                 if result['joined']:break
                 if time.monotonic()>deadline:raise TimeoutError('Owned workers did not finish')
                 time.sleep(.01)
+            first=result if mode in progression_modes else None
+            if first is not None:
+                rpc.run(2 if mode=='tail_rotation' else 1,1,False)
+                while True:
+                    result=rpc.poll()
+                    if result['joined']:break
+                    if time.monotonic()>deadline:raise TimeoutError('Progression workers did not finish')
+                    time.sleep(.01)
             if mode=='respawn':
                 rpc.respawn();rpc.run(35,1,True)
                 while True:
@@ -179,6 +189,21 @@ def dummy():
             if mode=='respawn':assert v[3]==4 and v[0]>=3,(mode,result)
             if mode=='bounded_logs':assert v[13]>=64 and len(result['events'])==64,(mode,result)
             if mode=='cooldown_pressure':assert v[3]==64 and v[4]==0 and v[35]>0,(mode,result)
+            if first is not None:
+                initial=[int(x) for x in first['values']]
+                assert v[3]==v[4]==(2 if mode in ('budget_before_candidate','budget_after_dispatch') else 1),(mode,result)
+                assert initial[3]==initial[4]==(1 if mode=='budget_after_dispatch' else 0) and v[12]==0,(mode,first,result)
+                assert first['body_states'][1]['count']==2 and first['body_states'][1]['state']==1,(mode,first)
+                if mode=='budget_before_candidate':
+                    assert initial[12]==initial[21]==0 and initial[22]==2 and initial[6]==1,(mode,first)
+                    assert all(b['count']==0 and b['state']==5 for b in result['body_states']),(mode,result)
+                else:
+                    assert initial[12]==initial[21]==(8 if mode=='tail_rotation' else 1),(mode,first)
+                    assert initial[22]==(8 if mode=='tail_rotation' else 2),(mode,first)
+                    assert result['body_states'][0]['count']==(0 if mode=='budget_after_dispatch' else 2),(mode,result)
+                    assert result['body_states'][0]['state']==(5 if mode=='budget_after_dispatch' else 1),(mode,result)
+                    assert result['body_states'][1]['count']==0 and result['body_states'][1]['state']==5,(mode,result)
+                assert v[6]==(1 if mode in ('slow_bind_first','slow_action_first','budget_before_candidate','budget_after_dispatch') else 0),(mode,result)
             if mode=='slow_query':assert all(b-a>=frequency*.320 for a,b in zip(qpc,qpc[1:])),(mode,result)
             if mode=='valid':
                 assert v[31]==INTERVAL_MS and v[0]==v[1],(mode,result)
@@ -200,8 +225,8 @@ def dummy():
                     assert v[3]==v[47]==v[48]==1 and v[42]==1 and stats[15]==1,(mode,result)
                 elif mode=='container_no_progress':assert v[47]==2 and v[48]==0 and v[0]>=4,(mode,result)
                 else:assert v[3]==v[47]==v[48]==stats[15]==0,(mode,result)
-            report['cases'].append({'name':mode,'passed':True,'clock':'controlled_frozen_prequery_inflight' if mode=='prequery_concurrency' else 'accelerated_tick_and_qpc' if mode in ('bounded_logs','cooldown_pressure') else 'real_windows_clocks',
-              'result':result,'cleanup':stop,'qpc_intervals_ms':[(b-a)/frequency*1000 for a,b in zip(qpc,qpc[1:])]})
+            report['cases'].append({'name':mode,'passed':True,'clock':'controlled_progression' if mode in progression_modes else 'controlled_frozen_prequery_inflight' if mode=='prequery_concurrency' else 'accelerated_tick_and_qpc' if mode in ('bounded_logs','cooldown_pressure') else 'real_windows_clocks',
+              'result':result,'cleanup':stop,'first_cycle':first,'qpc_intervals_ms':[(b-a)/frequency*1000 for a,b in zip(qpc,qpc[1:])]})
         bounded(script.unload);report['script_unloaded']=True;bounded(session.detach);session=None;report['session_detached']=True
         host_tests=subprocess.run([sys.executable,str(ROOT/'tools/autoloot_runtime_fixture.py')],capture_output=True,text=True,encoding='utf-8',timeout=30,creationflags=subprocess.CREATE_NO_WINDOW)
         report['host_tests']={'passed':host_tests.returncode==0,'exit_code':host_tests.returncode,

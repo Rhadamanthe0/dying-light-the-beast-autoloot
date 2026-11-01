@@ -33,6 +33,7 @@
 /tests/*
 !/tests/test_game_paths.py
 !/tests/test_discovery_paths.py
+!/tests/test_discovery_memory.py
 !/tests/test_package.py
 !/tests/test_runtime_control.py
 !/tests/test_runtime_host.py

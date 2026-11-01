@@ -202,7 +202,7 @@ def qualify(stage, downloads, logs, report):
         raise RuntimeError('Embedded native qualification failed; see ' + str(log))
     proof_file = stage / 'evidence/autoloot-runtime-dummy.json'
     proof = json.loads(proof_file.read_text(encoding='utf-8'))
-    if proof.get('passed') is not True or len(proof.get('cases', [])) != 64 or not proof.get('host_tests', {}).get('passed') or \
+    if proof.get('passed') is not True or len(proof.get('cases', [])) != 70 or not proof.get('host_tests', {}).get('passed') or \
             proof.get('core_sha256') != digest(stage / 'tools/autoloot_runtime.c') or \
             proof.get('fixture_sha256') != digest(stage / 'tools/autoloot_runtime_fixture.js'):
         raise ValueError('Embedded qualification evidence does not match the staged sources')

@@ -385,22 +385,24 @@ destroy:
   state.status=1;
   for(i=0;i<n;i++){
     if(!checkpoint())break;
-    if(raw[i]<0x10010){processed++;continue;}
+    /* A started candidate must not starve the rest on a read/budget refusal. */
+    processed++;
+    if(raw[i]<0x10010)continue;
     {guint64 vt;if(!q(raw[i]-0x10,&vt))break;
       if(vt==cfg[BASE]+0x29ec228&&runtime_config[11]){if(bind_cbs(raw[i]-0x10,1))goto bound;}
       else if(vt==cfg[BASE]+0x29e6ff8&&runtime_config[14]){if(bind_cbs(raw[i]-0x10,2))goto bound;}
       else if(vt==cfg[BASE]+0x29e84f0&&runtime_config[13]){if(bind_body(raw[i]-0x10))goto bound;}
-      else {processed++;continue;}
+      else continue;
     }
     {
       if(!checkpoint())break;
-      state.refused++;processed++;continue;
+      state.refused++;continue;
     }
 bound:
-    if(cooling(GetTickCount64())){processed++;continue;}
-    if(!action())break;processed++;
+    if(cooling(GetTickCount64()))continue;
+    if(!action())break;
   }
-  /* Advance only entries actually handled/refused, never merely copied. */
+  /* Advance attempted entries, never merely copied or stopped before entry. */
   state.next_offset=offset+processed<total?offset+processed:0;
 finish:
   if(initialized){state.dtors++;vector_destroy(v);}

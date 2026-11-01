@@ -152,10 +152,10 @@ def prepare_static():
                                          "proof":"Caller12cc9b6 invokes getter6e43e0 on saved THIS; getter reads+0x200. Returned host is passed to loop1ee6970, which reads host+0x1c8 then its registry vector+0x1d8/count. Final exact Trigger class+owner Player, complete vector and rereads are mandatory; the host itself is not assumed to have a particular RTTI."},
             "chain": {"game_level_offset":"0x138","level_client_offset":"0xec8","client_gate_offset":"0x88","client_player_offset":"0x90",
                       "trigger_owner_pointer_offset":"0x8","trigger_owner_vtable_slot_offset":"0x4a8","trigger_owner_getter_rva":"0x17f800"},
-            "discovery": {"method":"Read the first 0x10000 bytes of current Player and the statically evidenced native controller vector via Player+0x200→host+0x1c8→registry vector+0x1d8. Require unique exact TriggerController primary vtable and owner Player. No heap traversal.",
+            "discovery": {"method":"Scan readable pages within the first 0x10000 bytes of current Player as optional direct pointers, excluding entire pointer words touching unreadable pages. Read the statically evidenced native controller vector via Player+0x200→host+0x1c8→registry vector+0x1d8 as mandatory. Require unique exact TriggerController primary vtable and owner Player. No heap traversal.",
                           "unique_trigger_required":True,"memory_seconds":MEMORY_SECONDS,"max_bytes":MAX_BYTES,"max_reads":MAX_READS},
             "limits": ["Game/Player chain offsets reuse the previously observed native chain, then require exact live identity and a complete reread; the chain is not a guarantee of object lifetime.",
-                       "Controller discovery is restricted to direct Player prefix pointers and the native local controller vector. Missing, unreadable, ambiguous or budget-limited discovery refuses readiness.",
+                       "Controller discovery is restricted to optional readable Player prefix pages and the mandatory native local controller vector. Unreadable optional pages are skipped; unreadable required ranges, failed or partial OS reads, missing or ambiguous controllers, and exhausted budgets refuse readiness.",
                        "Deadlines are checked before and after synchronous OS reads; a kernel call cannot be preempted by this script. Any overrun rejects readiness.",
                        "No game code, hook, engine invocation, item collection or cooperative behavior is exercised."]}
 
@@ -261,6 +261,28 @@ class Reader:
     def q(self,address):
         return unpack_q(self.read(address,8))
 
+    def readable_prefix(self,address,size):
+        """Optional x64 prefix scan; keep offsets and exclude words touching holes."""
+        self.check()
+        if not 0x10000<=address<MAX_POINTER or not 0<size<=PLAYER_PREFIX_BYTES or address+size>MAX_POINTER:
+            raise ValueError("Invalid optional prefix range")
+        prefix=bytearray(size)
+        holes=[]
+        offset=0
+        while offset<size:
+            cursor=address+offset
+            count=min(size-offset,0x1000-(cursor&0xfff))
+            if self.readable(cursor,count):
+                prefix[offset:offset+count]=self.read(cursor,count)
+            else:
+                holes.append((offset//8*8,min(size,((offset+count+7)//8)*8)))
+            offset+=count
+        # Apply after all reads: an unaligned word may also touch a later page.
+        for begin,end in holes:
+            prefix[begin:end]=bytes(end-begin)
+        self.check()
+        return bytes(prefix)
+
     def stats(self):
         return {"elapsed_seconds":round(time.monotonic()-self.started,6),"read_calls":self.read_calls,
                 "bytes_requested":self.bytes_requested,"virtual_queries":self.queries,
@@ -328,7 +350,7 @@ def discover(pid=None):
             return game,level,client,gate,player
         game,level,client,gate,player=get_chain()
         diagnostic['chain']={'game':hex(game),'level':hex(level),'client':hex(client),'player':hex(player)}
-        prefix=rd.read(player,PLAYER_PREFIX_BYTES)
+        prefix=rd.readable_prefix(player,PLAYER_PREFIX_BYTES)
         candidates=pointer_values(prefix)
         matches={}
         class_candidates=[]
