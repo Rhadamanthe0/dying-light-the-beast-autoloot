@@ -57,7 +57,7 @@ def static_proof():
                              ('GetLevel','engine',0x82e3d0),('VectorDestructor','game',0x1731f0),
                              ('ContextCtor','game',0x1727890),('GetComponentImpl','engine',0x4515c0),
                              ('GetAction','game',0xca1ac0),('CanUse','game',0xc88470),('PlayerDispatch','game',0x12d9aa0),
-                             ('GroundMessageWrapper','game',0x80cb40),('GroundItemTake','game',0x11944b0),('ProxyTargetThunk','game',0x24ec9b6),('ContainerTake','game',0x1194280),('ContainerTakeAll','game',0x1185870)]:
+                             ('BagCanUse','game',0x1121590),('BagTake','game',0x11936c0),('GroundMessageWrapper','game',0x80cb40),('GroundItemTake','game',0x11944b0),('DroppedCanUse','game',0xd6c570),('DroppedTake','game',0xdee670),('DroppedInventoryTake','game',0xe1a1c0),('OpportunityFalse','game',0x174c40),('OpportunityFlag','game',0xa305a0),('OpportunityContext','game',0xa305b0),('ProxyTargetThunk','game',0x24ec9b6),('ContainerCanUse','game',0x1121810),('ContainerTake','game',0x1194280),('ContainerTakeAll','game',0x1185870)]:
         image=game if module=='game' else engine;offset=image.offset(rva)
         guards.append({'name':name,'module':module,'rva':rva,'hex':image.data[offset:offset+16].hex()})
     return {'function_guards':guards,'game_sha256':discovery.HASHES['game'],'engine_sha256':discovery.HASHES['engine'],
@@ -65,7 +65,7 @@ def static_proof():
             'interval_ms':INTERVAL_MS,'radius_metres':RADIUS_METRES,'page_size':8,'budget_ms_between_calls':8,'rpm_limit':4096}
 
 
-def prepare(session_path=None,duration=0,pid=None,ground_items=False,max_dispatches=0,ground_only=False,containers=False,containers_only=False):
+def prepare(session_path=None,duration=0,pid=None,ground_items=False,max_dispatches=0,ground_only=False,containers=False,containers_only=False,dropped_items=False,diagnostic_only=False):
     if type(max_dispatches) is not int or not 0<=max_dispatches<=1000000:raise ValueError('max_dispatches must be0..1000000')
     if frida.__version__!='17.24.0':raise ValueError('Reviewed Frida17.24.0 required')
     if not 0<=duration<=86400:raise ValueError('Duration must be0(resident)..86400s')
@@ -82,7 +82,9 @@ def prepare(session_path=None,duration=0,pid=None,ground_items=False,max_dispatc
       'module_name':game['name'],'module_path':game['path'],'module_base':game['base'],'module_size':game['size'],
       'game_instance':current['objects']['game']['address'],'player_instance':current['objects']['player']['address'],
       'prologues':[{**g,'module':'game'} for g in current['guarded_prologues']+current['discovery_prologues']]+static['function_guards']}
-    config['values']=[config['player_instance'],config['game_instance'],chain['game_global_slot'],game['base'],chain['level'],chain['client'],chain['player_gate'],engine['base'],'0','0','0',str(int(bool((ground_items or ground_only) and not containers_only))),str(max_dispatches),str(int(not (ground_only or containers_only))),str(int(bool(containers or containers_only)))]
+    config['values']=[config['player_instance'],config['game_instance'],chain['game_global_slot'],game['base'],chain['level'],chain['client'],chain['player_gate'],engine['base'],'0','0','0',str(int(bool((ground_items or ground_only) and not containers_only))),str(max_dispatches),str(int(not (ground_only or containers_only))),str(int(bool(containers or containers_only))),str(int(bool(dropped_items)))]
+    if diagnostic_only:
+        for slot in (11,13,14,15):config['values'][slot]='0'
     return config,{'validated_session':current,'query':static,
       'javascript_sha256':hashlib.sha256(Path(__file__).with_suffix('.js').read_bytes()).hexdigest(),
       'lifecycle_contract':'Only successful normal QuickJS17.24 unload permits session detach; no manual CModule disposal'}
@@ -101,7 +103,7 @@ def dummy():
         script=bounded(lambda:session.create_script(source,runtime='qjs'))
         script.on('message',lambda m,d:report.setdefault('messages',[]).append(m))
         report['stage']='load';bounded(script.load);rpc=script.exports_sync
-        modes=['valid','continuous_arrivals','zero_count','near2','far','dirty','wrong_handle','forwarding','extra','mode','nested','null_manager',
+        modes=['resource_mode_unreadable','resource_vfunc','resource_valid','resource_multiple','resource_empty','resource_count_limit','resource_count_overflow','resource_mode1','resource_mode_invalid','resource_wrong_state','resource_nested','resource_flag','resource_iloot','resource_callback','resource_wrong_owner','resource_strategy','resource_generation_changed','resource_full','resource_swap','resource_no_progress','resource_post_unreadable','resource_mode_changed','resource_count_changed','resource_near2','resource_far2','resource_range_changed','bag_empty','bag_iloot','bag_post_unreadable','bag_human_changed','bag_valid','bag_mode1','bag_human_control','bag_human_reciprocal','bag_strategy','bag_wrong_owner','bag_wrong_receiver','bag_generation_changed','bag_other_action','bag_full','bag_nested','bag_no_progress','bag_corpse_no_rescue','bag_callback','bag_near2','bag_far2','bag_range_changed','ground_canuse_opportunity_changed','dropped_canuse_opportunity_changed','ground_opportunity','dropped_opportunity','ground_opportunity_changed','dropped_opportunity_changed','ground_ordinary_throwable','dropped_ordinary_throwable','ground_unknown_getter','dropped_unknown_getter','ground_unreadable_desc','dropped_unreadable_desc','diagnostic_mix','diagnostic_only','dropped_valid','dropped_near2','dropped_far2','dropped_swap','dropped_full','dropped_no_progress','dropped_header_changed','dropped_desc_changed','dropped_generation_changed','dropped_post_unreadable','dropped_disabled','dropped_callback','unknown_class','valid','continuous_arrivals','zero_count','near2','far','dirty','wrong_handle','forwarding','extra','mode','nested','null_manager',
           'wrong_owner','ambiguous','other_action','eligibility_false','no_progress','empty','pagination','concurrency',
           'blocked_query','blocked_dispatch','blocked_dtor','slow_query','context_overflow','respawn','bounded_logs','cooldown_pressure',
           'ground_valid','ground_swap','ground_swap_during_dispatch','ground_forward','ground_forward_448','ground_forward_458',
@@ -113,7 +115,7 @@ def dummy():
         progression_modes={'unreadable_first','slow_bind_first','slow_action_first','budget_before_candidate','tail_rotation','budget_after_dispatch'}
         for mode in modes:
             report['stage']='configure '+mode;rpc.configure(mode)
-            ticks=6 if mode=='slow_query' else 85 if mode in ('valid','continuous_arrivals','no_progress','ground_continuous','ground_receiver_generation','ground_no_progress','container_no_progress') else 80 if mode in ('bounded_logs','cooldown_pressure') else 35
+            ticks=1 if mode=='resource_mode_changed' else 6 if mode=='slow_query' else 85 if mode in ('valid','continuous_arrivals','no_progress','ground_continuous','ground_receiver_generation','ground_no_progress','container_no_progress') else 80 if mode in ('bounded_logs','cooldown_pressure') else 35
             report['stage']='run '+mode;deadline=time.monotonic()+12
             if mode=='prequery_concurrency':
                 rpc.run(1,1,False)
@@ -176,6 +178,31 @@ def dummy():
                 assert v[11]-int(cadence[-1][1])==INTERVAL_MS,(mode,result)
                 assert v[38]-int(cadence[-1][4])==(frequency*INTERVAL_MS+999)//1000,(mode,result)
             assert all(b-a>=frequency*INTERVAL_MS/1000 for a,b in zip(qpc,qpc[1:])),(mode,result)
+            if mode.startswith('resource_'):
+                if mode in ('resource_valid','resource_multiple','resource_count_limit','resource_near2'):assert v[3]==v[57]==v[58]==1,(mode,result)
+                elif mode in ('resource_no_progress','resource_post_unreadable'):assert v[3]==v[57]==1 and v[58]==0,(mode,result)
+                elif mode=='resource_mode1':assert v[3]==v[47]==v[48]==1 and v[57]==v[58]==0,(mode,result)
+                else:assert v[3]==v[57]==v[58]==0,(mode,result)
+            if mode.startswith('bag_'):
+                if mode in ('bag_valid','bag_near2'):assert v[3]==v[54]==v[55]==1,(mode,result)
+                elif mode in ('bag_no_progress','bag_post_unreadable'):assert v[3]==v[54]==1 and v[55]==0,(mode,result)
+                else:assert v[3]==v[54]==v[55]==0,(mode,result)
+            if mode in ('ground_opportunity','dropped_opportunity'):
+                assert all(stats[i]==0 for i in (0,2,4,6,8)),(mode,result)
+            if mode=='diagnostic_mix':
+                assert v[63]==16 and sum(int(row[1])!=0 for row in result['candidates'])==16,(mode,result)
+                tables=[int(row[1]) for row in result['candidates']]
+                assert max(tables)-min(tables)==15*16,(mode,result)
+            if mode in ('diagnostic_only','diagnostic_mix'):
+                assert v[1]>0 and v[62]>0 and v[3]==0 and all(stats[i]==0 for i in (0,2,4,6,8)),(mode,result)
+            if mode.startswith('dropped_'):
+                if mode in ('dropped_valid','dropped_near2','dropped_ordinary_throwable'):assert v[3]==v[51]==v[52]==1,(mode,result)
+                elif mode in ('dropped_no_progress','dropped_post_unreadable'):assert v[3]==v[51]==1 and v[52]==0,(mode,result)
+                else:assert v[3]==v[51]==v[52]==0,(mode,result)
+            if mode=='unknown_class':
+                assert v[3]==0 and v[62]>1 and v[63]==1 and int(result['candidates'][0][1])!=0 and int(result['candidates'][0][5])==0,(mode,result)
+            if mode=='wrong_owner':
+                assert v[62]>0 and any(int(row[1])!=0 and int(row[5])==1 for row in result['candidates']),(mode,result)
             if mode=='valid':assert v[0]>=4 and v[1]>=4 and v[3]==2 and v[4]==2 and v[36]>=frequency*INTERVAL_MS/1000,(mode,result)
             if mode=='continuous_arrivals':
                 completed_cycles={int(e[0]) for e in result['events'] if int(e[5])==1}
@@ -214,7 +241,7 @@ def dummy():
                 if mode in ('ground_continuous','ground_receiver_generation'):
                     assert v[41]==0 and v[43]>=8 and v[44]==v[43] and v[42]==0,(mode,result)
                 elif mode=='ground_no_progress':assert v[41]==0 and v[43]==2 and v[44]==0 and v[0]>=4,(mode,result)
-                elif mode in ('ground_valid','ground_blocked_dispatch','ground_near2'):
+                elif mode in ('ground_valid','ground_blocked_dispatch','ground_near2','ground_ordinary_throwable'):
                     assert v[3]==1 and v[43]==1 and v[44]==1 and v[42]==1 and stats[15]==1,(mode,result)
                 elif mode=='ground_swap_during_dispatch':
                     assert v[3]==1 and v[42]==1 and v[44]==0 and stats[15]==0,(mode,result)
@@ -296,18 +323,41 @@ def _live(args):
           'updated_at_utc':datetime.now(timezone.utc).isoformat(),'message':message_text,'pid':config['pid'] if config else None,
           'result':report.get('result')}
         return write_json(status_path,value)
+    def remember_stop(value):
+        with lock:
+            report['cleanup']['stop_rpc']=value
+            if value.get('result'):report['result']=value['result']
+            if value.get('errors') or value.get('cleanup_errors'):
+                fault='Runtime stop reported faults: '+json.dumps({'errors':value.get('errors'),'cleanup_errors':value.get('cleanup_errors')})
+                if fault not in report['errors']:report['errors'].append(fault)
     def message(m,data):
         with lock:report['messages'].append(m)
         kind=m.get('payload',{}).get('type') if m.get('type')=='send' else None
+        if kind=='stopped':remember_stop(m['payload'])
         if kind=='armed':
             report['live_executed']=True;armed.set()
             if not status('active',True,True,'AutoLoot active: 2 m radius, 100 ms interval'):
                 report['errors'].append('Active status could not be published; stopping cooperatively');stopped.set()
             print('armed: resident native100ms autoloot',flush=True)
+        if m.get('type')=='error':report['errors'].append('JavaScript runtime error: '+str(m.get('description') or m))
         if kind=='stopped' or m.get('type')=='error':stopped.set()
     def disconnect(reason,crash):
         report['detached_event']={'reason':reason,'crash':str(crash) if crash else None}
         detached.set();stopped.set()
+    def rpc_error(phase,error):
+        detail=error if isinstance(error,str) else type(error).__name__+': '+str(error)
+        transport=('TimeoutError','InvalidOperationError','TransportError','OperationCancelledError',
+                   'ServerNotRunningError','ProcessNotFoundError')
+        category=str(error).split(':',1)[0] if isinstance(error,RuntimeError) else detail.split(':',1)[0]
+        invalid_closed=category!='InvalidOperationError' or any(text in detail.lower() for text in
+            ('script has been destroyed','script is destroyed','session is detached','connection is closed'))
+        if category in transport and invalid_closed:
+            notes=report.setdefault('rpc_interruptions',[])
+            if len(notes)==64:notes.pop(0)
+            notes.append({'phase':phase,'error':detail})
+            report['rpc_interruptions_count']=report.get('rpc_interruptions_count',0)+1
+        elif phase+': '+detail not in report['errors']:report['errors'].append(phase+': '+detail)
+        return detail
     def setup(function,seconds,label):
         done,outcome=lifecycle.launch(function)
         try:late=not done.wait(seconds)
@@ -329,7 +379,7 @@ def _live(args):
         api=discovery.api_setup();pids=discovery.process_ids(api)
         if not pids or (getattr(args,'pid',None) is not None and args.pid not in pids):
             report['game_closed']=True;status('game_closed',False,False,'The game is closed');raise _StopRequested()
-        config,proof=prepare(getattr(args,'session',None),args.duration,getattr(args,'pid',None),getattr(args,'ground_items',False),getattr(args,'max_dispatches',0),getattr(args,'ground_only',False),getattr(args,'containers',False),getattr(args,'containers_only',False));report['preflight']=proof
+        config,proof=prepare(getattr(args,'session',None),args.duration,getattr(args,'pid',None),getattr(args,'ground_items',False),getattr(args,'max_dispatches',0),getattr(args,'ground_only',False),getattr(args,'containers',False),getattr(args,'containers_only',False),getattr(args,'dropped_items',False),getattr(args,'diagnostic_only',False));report['preflight']=proof
         if stop_requested():report['stop_before_setup']=True;raise _StopRequested()
         raw=Path(__file__).with_suffix('.c').read_bytes()
         if hashlib.sha256(raw).hexdigest()!=proof['query']['core_sha256']:raise ValueError('Core changed after preflight')
@@ -349,8 +399,11 @@ def _live(args):
         if not armed.wait(1):raise RuntimeError('Resident hook did not report armed')
         deadline=time.monotonic()+args.duration if args.duration else None
         while not stopped.is_set() and (deadline is None or time.monotonic()<deadline) and not stop_requested():
-            value=lifecycle.bounded(script.exports_sync.poll,3)
-            if value.get('type')=='stopped':break
+            if detached.is_set():break
+            try:value=lifecycle.bounded(script.exports_sync.poll,3)
+            except Exception as error:
+                rpc_error('poll',error);break
+            if value.get('type')=='stopped':remember_stop(value);break
             if value.get('result',{}).get('ready'):
                 report['result']=value['result']
                 if value['result'].get('stats',{}).get('disabled',0)>0:
@@ -364,14 +417,15 @@ def _live(args):
     except _StopRequested:report['stop_requested']=True
     except KeyboardInterrupt:report['user_interrupt']=True
     except Exception as error:
-        if not detached.is_set():report['errors'].append(type(error).__name__+': '+str(error))
+        report['errors'].append(type(error).__name__+': '+str(error))
     finally:
         if script is not None and load_requested and not detached.is_set():
             status('stopping',True,False,'Stopping cooperatively and waiting for native calls')
-            try:report['cleanup']['stop_rpc']=lifecycle.bounded(script.exports_sync.stop,3)
-            except (Exception,KeyboardInterrupt) as error:report['cleanup']['stop_error']=str(error)
-            if 'stop_error' in report['cleanup']:
-                report['errors'].append('Stop state unknown; retaining transport until target exit');save()
+            if not detached.is_set():
+                try:remember_stop(lifecycle.bounded(script.exports_sync.stop,3))
+                except (Exception,KeyboardInterrupt) as error:report['cleanup']['stop_error']=rpc_error('stop',error)
+            if 'stop_error' in report['cleanup'] and not detached.is_set():
+                report['cleanup']['retained_until_target_exit']=True;save()
                 print('stop state unknown: retaining native resources, no forced release',flush=True)
                 while not detached.is_set():
                     try:detached.wait(1)
@@ -380,43 +434,52 @@ def _live(args):
                 report['cleanup']['native_completion_pending']=True;save()
                 try:
                     value=lifecycle.bounded(script.exports_sync.poll,3)
-                    if value.get('type')=='stopped':report['cleanup']['stop_rpc']=value;break
+                    if value.get('type')=='stopped':remember_stop(value);break
                     detached.wait(.1)
                 except (Exception,KeyboardInterrupt) as error:
-                    report['cleanup']['completion_wait_note']=str(error)
+                    report['cleanup']['completion_wait_note']=rpc_error('completion_poll',error)
                     try:detached.wait(.2)
                     except KeyboardInterrupt:pass
-            done,outcome=lifecycle.launch(script.unload)
-            try:pending=not done.wait(10)
-            except KeyboardInterrupt:pending=True
-            if pending:
-                report['errors'].append('Normal QJS unload pending: retaining host/session');save()
-                print('unload pending: retaining native code/state until normal completion or target exit',flush=True)
-                while not done.is_set() and not detached.is_set():
-                    try:done.wait(1)
-                    except KeyboardInterrupt:print('native resources retained; no forced release',flush=True)
-            if done.is_set() and 'error' not in outcome:report['cleanup']['script_unloaded']=True
-            elif done.is_set():
-                report['cleanup']['unload_error']=outcome['error'];report['errors'].append('Normal unload failed; resources retained');save()
-                while not detached.is_set():
-                    try:detached.wait(1)
-                    except KeyboardInterrupt:print('failed unload: retaining transport until target exit',flush=True)
+            if not detached.is_set():
+                done,outcome=lifecycle.launch(script.unload)
+                try:pending=not done.wait(10)
+                except KeyboardInterrupt:pending=True
+                if pending:
+                    rpc_error('unload',TimeoutError('Normal QJS unload pending; retaining host/session'));save()
+                    print('unload pending: retaining native code/state until normal completion or target exit',flush=True)
+                    while not done.is_set() and not detached.is_set():
+                        try:done.wait(1)
+                        except KeyboardInterrupt:print('native resources retained; no forced release',flush=True)
+                if done.is_set() and 'error' not in outcome:report['cleanup']['script_unloaded']=True
+                elif done.is_set():
+                    report['cleanup']['unload_error']=rpc_error('unload',outcome['error']);save()
+                    while not detached.is_set():
+                        try:detached.wait(1)
+                        except KeyboardInterrupt:print('failed unload: retaining transport until target exit',flush=True)
         elif script is None or not load_requested:
             report['cleanup']['no_script_execution']=True;report['cleanup']['script_unloaded']=True
         if session is not None and not detached.is_set() and report['cleanup'].get('script_unloaded'):
             try:lifecycle.bounded(session.detach,5);report['cleanup']['session_detached']=True
-            except Exception as error:report['cleanup']['detach_error']=str(error)
+            except Exception as error:report['cleanup']['detach_error']=rpc_error('detach',error)
         if detached.is_set():report['cleanup']['session_detached']=True
-        stop=report['cleanup'].get('stop_rpc',{});result=stop.get('result') or {}
+        stop=report['cleanup'].get('stop_rpc',{});result=stop.get('result') or report.get('result') or {}
         report['result']=result;report['finished_at_utc']=datetime.now(timezone.utc).isoformat()
         report['ok']=(not report['errors'] and stop.get('restoration_verified') is True and stop.get('detach_done') is True and
                       not stop.get('errors') and not stop.get('cleanup_errors') and report['cleanup'].get('script_unloaded') is True and
                       report['cleanup'].get('session_detached') is True)
-        closed=report.get('detached_event',{}).get('reason')=='process-terminated' or report.get('game_closed')
-        if closed:report['ok']=not report['errors'];report['game_closed']=True
+        event=report.get('detached_event',{})
+        closed=event.get('reason')=='process-terminated' or report.get('game_closed')
+        clean_exit=closed and event.get('crash') is None
+        if event.get('crash') is not None:report['errors'].append('Target process crashed: '+event['crash'])
+        if event.get('reason') not in (None,'application-requested','process-terminated'):
+            report['errors'].append('Target disconnected: '+str(event['reason']))
+        if report.get('rpc_interruptions') and not clean_exit:
+            report['errors'].append('RPC transport interrupted without a confirmed clean target exit')
+        if closed:report['ok']=not report['errors'] and clean_exit;report['game_closed']=True
         if report.get('stop_before_setup'):report['ok']=not report['errors']
-        phase='game_closed' if closed else 'stopped' if report['ok'] else 'error'
-        status(phase,False,False,'The game is closed' if closed else 'AutoLoot stopped' if report['ok'] else '; '.join(report['errors']) or 'Incomplete cleanup')
+        report['ok']=report['ok'] and not report['errors']
+        phase='game_closed' if closed and report['ok'] else 'stopped' if report['ok'] else 'error'
+        status(phase,False,False,'The game is closed' if closed and report['ok'] else 'AutoLoot stopped' if report['ok'] else '; '.join(report['errors']) or 'Incomplete cleanup')
         save()
     print(json.dumps({'output':str(args.output),'ok':report['ok'],'status':report['result'].get('status'),'errors':report['errors']}))
     return 0 if report['ok'] else 1
@@ -433,6 +496,8 @@ def main():
     parser.add_argument('--duration',type=float,default=0)
     parser.add_argument('--pid',type=int)
     parser.add_argument('--launch-token',default=None)
+    parser.add_argument('--diagnostic-only',action='store_true',help='Observe nearby classes with all collection routes disabled')
+    parser.add_argument('--dropped-items',action='store_true',help='Experimental exact DroppedItem Take1 route')
     parser.add_argument('--containers',action='store_true',help='Experimental exact local Container Take1 route')
     parser.add_argument('--containers-only',action='store_true',help=argparse.SUPPRESS)
     parser.add_argument('--ground-only',action='store_true',help=argparse.SUPPRESS)
@@ -448,7 +513,7 @@ def main():
         print(json.dumps({'static_only':True,'process_opened':False,'proof':static_proof()}));return 0
     if not 0<=args.duration<=86400:parser.error('duration must be0..86400s')
     if args.preflight_only:
-        config,proof=prepare(args.session,args.duration,args.pid,args.ground_items,args.max_dispatches,args.ground_only,args.containers,args.containers_only)
+        config,proof=prepare(args.session,args.duration,args.pid,args.ground_items,args.max_dispatches,args.ground_only,args.containers,args.containers_only,args.dropped_items,args.diagnostic_only)
         print(json.dumps({'preflight_ok':True,'frida_attached':False,'output_written':False,'config':config,
                           'core_sha256':proof['query']['core_sha256']}));return 0
     return live(args)

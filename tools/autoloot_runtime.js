@@ -21,18 +21,24 @@ function snapshot(){
     'next_offset','events_total','event_cursor','cadence_cursor','last_native_count','last_cycle_rpm','last_cycle_status',
     'last_guard_reason','thread_id','last_processed','last_copied','disabled','inflight_diagnostic_only','selected_diagnostic_only',
     'local_admissions','foreign_due_entries','contended_entries','last_query_al','dispatch_inflight','interval_ms',
-    'page_size','rpm_limit','budget_ms','cooldown_pressure','minimum_start_interval_qpc','maximum_start_interval_qpc','next_due_qpc','native_qpc_frequency','ground_items_enabled','max_dispatches','dispatch_limit_reached','ground_dispatches','ground_source_changed','ground_refused','containers_enabled','container_dispatches','container_completed_count0_state5','container_refused'];
+    'page_size','rpm_limit','budget_ms','cooldown_pressure','minimum_start_interval_qpc','maximum_start_interval_qpc','next_due_qpc','native_qpc_frequency','ground_items_enabled','max_dispatches','dispatch_limit_reached','ground_dispatches','ground_source_changed','ground_refused','containers_enabled','container_dispatches','container_completed_count0_state5','container_refused','dropped_items_enabled','dropped_dispatches','dropped_source_changed','dropped_refused','bag_dispatches','bag_completed_count0_state5','bag_refused','resource_dispatches','resource_completed_count0_state5','resource_refused'];
   const stats=Object.fromEntries(names.map((name,i)=>[name,n(i)]));
   const events=Array.from({length:Math.min(stats.events_total,64)},(_,j)=>{
     const i=(stats.event_cursor-Math.min(stats.events_total,64)+j)%64,a=64+i*16,x=64+64*16+64*5+i*4;
-    return {source_kind:({0:'corpse',1:'ground_item',2:'container'})[n(x)]||'unknown',item_flags_before:n(x+1),item_flags_after:n(x+2),item_invalidation_bits:n(x+3),cycle:n(a),time_ms:n(a+1),body:'0x'+q(a+2).toString(16),human:'0x'+q(a+3).toString(16),
+    return {source_kind:({0:'corpse',1:'ground_item',2:'container',3:'dropped_item',4:'loot_bag',5:'resource_container'})[n(x)]||'unknown',item_flags_before:n(x+1),item_flags_after:n(x+2),item_invalidation_bits:n(x+3),cycle:n(a),time_ms:n(a+1),body:'0x'+q(a+2).toString(16),human:'0x'+q(a+3).toString(16),
       handle:'0x'+q(a+4).toString(16),status:n(a+5),reason:n(a+6),before_count:n(a+7),post_count:n(a+8),post_state:n(a+9),
       action_id:q(a+10).toString(),eligibility_al:n(a+11),dispatch_return_al_diagnostic:n(a+12),rpm_reads:n(a+13),
       elapsed_ms:n(a+14)/frequency*1000,distance_squared_metres:n(a+15)/1000000};});
   const cadence=Array.from({length:Math.min(stats.cadence_cursor,64)},(_,j)=>{
     const i=(stats.cadence_cursor-Math.min(stats.cadence_cursor,64)+j)%64,a=64+64*16+i*5;
     return {cycle:n(a),started_ms:n(a+1),ended_ms:n(a+2),elapsed_ms:n(a+3)/frequency*1000,started_qpc:q(a+4).toString()};});
-  return {ready:true,stats,events,cadence,qpc_frequency:frequency,helper_observation_available:false,
+  const candidate_diagnostics=Array.from({length:16},(_,i)=>{
+    const a=64+64*16+64*5+64*4+i*6,vt=q(a+1);
+    return {body:'0x'+q(a).toString(16),vtable:'0x'+vt.toString(16),
+      vtable_rva:vt.compare(uint64(config.module_base))>=0&&vt.compare(uint64(config.module_base).add(config.module_size))<0?'0x'+vt.sub(uint64(config.module_base)).toString(16):null,
+      reason:n(a+2),cycle:n(a+3),cycle_started_ms:n(a+4),stage:n(a+5)===0?'unsupported_or_disabled_class':'bind_refused'};
+  }).filter(row=>row.vtable!=='0x0');
+  return {ready:true,stats,events,cadence,candidate_diagnostics,candidate_observations:n(62),candidate_distinct_samples:n(63),qpc_frequency:frequency,helper_observation_available:false,
     inventory_credit_proven:false,resources_retained_until_normal_unload:true};
 }
 function stop(reason){
@@ -98,7 +104,7 @@ try{
   hold.contextBlock=Memory.alloc(96);
   const ctx=hold.contextBlock.add(31).and(ptr('0xfffffffffffffff0'));
   ctx.sub(16).writeByteArray(new Uint8Array(16).fill(0xa5));ctx.writeByteArray(new Uint8Array(48));ctx.add(48).writeByteArray(new Uint8Array(16).fill(0x5a));
-  if(config.values.length!==15)throw new Error('Exact immutable native runtime config required');
+  if(config.values.length!==16)throw new Error('Exact immutable native runtime config required');
   config.values.forEach((v,i)=>hold.cfg.add(i*8).writeU64(uint64(v)));
   hold.cfg.add(8*8).writePointer(vector);hold.cfg.add(9*8).writePointer(ctx);hold.cfg.add(10*8).writeU64(uint64(frequency));
   hold.module=new CModule(coreSource,{runtime_config:hold.cfg,cfg:hold.bindingCfg,state:hold.state,
@@ -109,7 +115,7 @@ try{
     select_action:game.base.add(0xca1ac0),can_use:game.base.add(0xc88470),player_dispatch:game.base.add(0x12d9aa0)});
   const cm=hold.module,stateSize=new NativeFunction(cm.state_size,'uint',[])();
   const snapshotSize=new NativeFunction(cm.snapshot_size,'uint',[])();
-  if(stateSize>32768||snapshotSize!==13312)throw new Error('Native runtime layout mismatch');
+  if(stateSize>32768||snapshotSize!==14080)throw new Error('Native runtime layout mismatch');
   hold.snapshot=Memory.alloc(snapshotSize);hold.snapshot.writeByteArray(new Uint8Array(snapshotSize));
   nativeSnapshot=new NativeFunction(cm.snapshot,'uint',['pointer']);nativePending=new NativeFunction(cm.pending,'uint',[]);
   nativeDisable=new NativeFunction(cm.disable,'void',[]);

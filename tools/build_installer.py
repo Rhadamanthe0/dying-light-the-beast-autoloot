@@ -18,7 +18,8 @@ import uuid
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '1.1.1'
+VERSION = '1.2.0'
+NATIVE_CASE_COUNT = 144
 PYTHON_VERSION = '3.14.7'
 PYTHON_EMBED_URL = 'https://www.python.org/ftp/python/3.14.7/python-3.14.7-embed-amd64.zip'
 PYTHON_EMBED_SHA256 = 'd297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15'
@@ -26,7 +27,7 @@ PACKAGES = {'frida': '17.24.0', 'pefile': '2024.8.26', 'capstone': '5.0.9'}
 TOOLS = ('autoloot_runtime.py', 'autoloot_runtime.js', 'autoloot_runtime.c',
          'autoloot_runtime_fixture.py', 'autoloot_runtime_fixture.js', 'autoloot_watch.py',
          'runtime_paths.py', 'runtime_control.py', 'game_paths.py', 'discover_session.py',
-         'inspect_native.py', 'observe_runtime.py', 'manage.ps1', 'control.py')
+         'inspect_native.py', 'observe_runtime.py', 'manage.ps1', 'control.py', 'DIAGNOSTIC.md')
 FILES = ('README.md', 'requirements.txt', 'autoloot.local.example.json')
 
 
@@ -202,7 +203,7 @@ def qualify(stage, downloads, logs, report):
         raise RuntimeError('Embedded native qualification failed; see ' + str(log))
     proof_file = stage / 'evidence/autoloot-runtime-dummy.json'
     proof = json.loads(proof_file.read_text(encoding='utf-8'))
-    if proof.get('passed') is not True or len(proof.get('cases', [])) != 70 or not proof.get('host_tests', {}).get('passed') or \
+    if proof.get('passed') is not True or len(proof.get('cases', [])) != NATIVE_CASE_COUNT or not proof.get('host_tests', {}).get('passed') or \
             proof.get('core_sha256') != digest(stage / 'tools/autoloot_runtime.c') or \
             proof.get('fixture_sha256') != digest(stage / 'tools/autoloot_runtime_fixture.js'):
         raise ValueError('Embedded qualification evidence does not match the staged sources')
