@@ -66,3 +66,51 @@ class Image:
                     funcs.append(hex(rr))
                 if funcs: result.append({'class':cls,'subobject_offset':suboff,'vtable_rva':hex(self.rva(vf)),'scan_limit_reached':len(funcs)==limit,'functions':funcs})
         return result
+
+
+    def class_name(self, vtable_rva):
+        """Resolve an MSVC RTTI name from a local PE, never from game memory."""
+        try:
+            col_va = struct.unpack_from('<Q', self.data, self.offset(vtable_rva - 8))[0]
+            col_rva = col_va - self.base
+            col = self.offset(col_rva)
+            signature, _, _, descriptor, _, self_rva = struct.unpack_from('<6I', self.data, col)
+            if signature != 1 or self_rva != col_rva:
+                return None
+            start = self.offset(descriptor) + 16
+            end = self.data.find(b'\0', start, start + 256)
+            if end < 0:
+                return None
+            name = self.data[start:end].decode('ascii')
+            return name if name.startswith(('.?AV', '.?AU')) else None
+        except (ValueError, OverflowError, struct.error, UnicodeDecodeError, pefile.PEFormatError):
+            return None
+
+
+if __name__ == '__main__':
+    import argparse
+    import hashlib
+    import json
+    parser = argparse.ArgumentParser(description='Resolve candidate classes from a runtime report; reads local files only.')
+    parser.add_argument('--report', type=Path, required=True)
+    args = parser.parse_args()
+    image = Image(GAME / 'ph_ft/work/bin/x64/gamedll_ph_x64_rwdi.dll')
+    report = json.loads(args.report.read_text(encoding='utf-8-sig'))
+    samples = []
+    def visit(value):
+        if isinstance(value, dict):
+            for sample in value.get('candidate_diagnostics', []):
+                row = dict(sample)
+                rva = row.get('vtable_rva')
+                row['class_name'] = image.class_name(int(rva, 16)) if rva else None
+                if row not in samples:
+                    samples.append(row)
+            for key, child in value.items():
+                if key != 'candidate_diagnostics':
+                    visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+    visit(report)
+    print(json.dumps({'game_sha256': hashlib.sha256(image.data).hexdigest(),
+                      'candidate_diagnostics': samples}, indent=2))

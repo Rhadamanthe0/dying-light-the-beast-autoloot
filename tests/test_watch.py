@@ -276,6 +276,7 @@ class WatchTests(unittest.TestCase):
         options = popen.call_args.kwargs
         self.assertEqual(command[0], str(backend.pythonw))
         self.assertIn('--ground-items', command)
+        self.assertIn('--dropped-items', command)
         self.assertIn('--containers', command)
         self.assertIn('--pause-file', command)
         self.assertEqual(command[command.index('--pause-file')+1], str(self.args.pause_file))

@@ -1,6 +1,6 @@
 # Better AutoLoot — Dying Light: The Beast
 
-Automatically loot corpses, crafting components, bags and supported containers within **2 metres**, with a **100 ms target interval**. No aiming or interaction key required.
+Automatically harvest supported plants and loot inventory weapons, corpses, crafting components, leftover loot bags and supported containers within **2 metres**, with a **100 ms target interval**. No aiming or interaction key required.
 
 Runs invisibly in the background, checks for the game every **10 seconds**, and stops looting when the game closes.
 
@@ -25,8 +25,11 @@ Installs for your Windows account in `%LOCALAPPDATA%\Programs\Better AutoLoot` b
 - Windows 10/11 x64; run the game and mod under the same account and privilege level.
 - Supports **Steam executable 1.7.1.0na, build 25361591**. Unsupported game updates require a new qualified mod release.
 - Respects inventory limits. Does not swap weapons, unlock containers or perform separate opening steps.
+- Collects supported ground weapons without type, rarity or quality filters. Individual pickups marked by the engine as opportunity weapons (such as the tested pitchfork) are left in place.
+- Harvests plants using the supported ready-to-take container mechanism; no plant-name list is needed.
 - No wall visibility check: nearby loot can pass through thin walls. Pauses, slow frames and large groups can delay the 100 ms target.
-- Current 2 m / 100 ms settings and automatic startup still await in-game confirmation. **Co-op remains unverified.**
+- In-game checks confirmed lavender, chamomile, a common C515 carbine, a military axe and leftover loot bags; an opportunity pitchfork remained untouched. Other plant mechanisms and legendary weapons have not been individually verified.
+- The 100 ms interval remains a target; automatic startup and **co-op remain unverified in game**. Individual opportunity-weapon exclusion is verified on the single-item routes; multiple-item corpse/container payloads have not been individually qualified for that exclusion.
 
 ## Troubleshooting
 

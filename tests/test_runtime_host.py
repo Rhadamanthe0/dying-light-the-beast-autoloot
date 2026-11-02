@@ -62,9 +62,32 @@ class RuntimeHostTests(unittest.TestCase):
             spec = importlib.util.spec_from_file_location('autoloot_runtime_host_tested', SOURCE)
             self.runtime = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(self.runtime)
+        self.actual_prepare = self.runtime.prepare
         self.runtime.prepare = Mock(side_effect=forbidden)
         self.runtime.lifecycle = SimpleNamespace(
             launch=immediate_launch, bounded=lambda function, seconds=5: function())
+
+    def test_diagnostic_only_overrides_every_collection_switch(self):
+        self.frida.__version__ = '17.24.0'
+        root = self.args.output.parent
+        (root / 'evidence').mkdir()
+        (root / 'evidence/autoloot-runtime-dummy.json').write_text(
+            json.dumps({'passed': True, 'core_sha256': 'core'}))
+        module = {'sha256': 'game', 'name': 'game', 'path': 'game', 'base': '0x100000', 'size': 1}
+        current = {'ready': True, 'pid': 42, 'modules': {'game': module, 'engine': module},
+                   'process_identity': {'creation_time_100ns': 1, 'executable': {}},
+                   'objects': {'game': {'address': '0x200000'}, 'player': {'address': '0x300000'}},
+                   'guarded_prologues': [], 'discovery_prologues': [],
+                   'chain': {key: '0x400000' for key in ('game_global_slot', 'level', 'client', 'player_gate')}}
+        self.discovery.HASHES = {'game': 'game', 'engine': 'game'}
+        self.discovery.discover = Mock(return_value=current)
+        with patch.object(self.runtime, 'ROOT', root), patch.object(self.runtime, 'static_proof',
+                return_value={'core_sha256': 'core', 'function_guards': []}):
+            for diagnostic in (False, True):
+                config, _ = self.actual_prepare(ground_items=True, containers=True,
+                                               dropped_items=True, diagnostic_only=diagnostic)
+                self.assertEqual([config['values'][i] for i in (11, 13, 14, 15)],
+                                 ['0' if diagnostic else '1'] * 4)
 
     def run_host(self):
         with redirect_stdout(io.StringIO()):
@@ -184,6 +207,132 @@ class RuntimeHostTests(unittest.TestCase):
                 patch.object(self.runtime, 'live', return_value=0) as live:
             self.assertEqual(self.runtime.main(), 0)
         self.assertEqual(live.call_args.args[0].pause_file, pause)
+
+    def closing_transport(self, phase='stop', *, crash=None, reason='process-terminated', native_fault=False, stop_fault=False, cleanup_fault=False, js_fault=False, poll_error=None, destroyed_message='script has been destroyed'):
+        callbacks, trace = {}, []
+        invalid = type('InvalidOperationError', (Exception,), {})
+        self.frida.InvalidOperationError = invalid
+        def close():
+            callbacks['detached'](reason, crash)
+        def load():
+            callbacks['message']({'type': 'send', 'payload': {'type': 'armed'}}, None)
+            if js_fault:
+                callbacks['message']({'type': 'error', 'description': 'script fault before exit'}, None)
+        polls = []
+        def poll():
+            trace.append('poll')
+            if not polls:
+                polls.append(True)
+                return {'type': 'poll', 'result': {'ready': True, 'stats': {'cycles': 7, 'disabled': int(native_fault)}}}
+            if phase in ('poll_stopped','send_stopped'):
+                value={'type':'stopped','errors':['stopped native fault'] if stop_fault else [],
+                       'cleanup_errors':['stopped cleanup fault'] if cleanup_fault else [],
+                       'result':{'ready':True,'stats':{'cycles':8}}}
+                if phase=='send_stopped':callbacks['message']({'type':'send','payload':value},None)
+                close()
+                return value if phase=='poll_stopped' else {'type':'poll'}
+            if phase == 'unload_clean':return {'type': 'stopped'}
+            if phase == 'poll':close()
+            raise poll_error if poll_error is not None else TimeoutError('poll interrupted during target exit')
+        def stop():
+            trace.append('stop')
+            if phase == 'stop':
+                close()
+                raise invalid(destroyed_message)
+            return {'type': 'stopped', 'restoration_verified': True, 'detach_done': True,
+                    'errors': ['native stop fault'] if stop_fault else [], 'cleanup_errors': ['cleanup fault'] if cleanup_fault else []}
+        def unload():
+            trace.append('unload')
+            if phase in ('unload', 'unload_clean'):
+                close()
+                if phase == 'unload':raise invalid(destroyed_message)
+        script = SimpleNamespace(on=Mock(side_effect=lambda name, callback: callbacks.__setitem__(name, callback)),
+                                 load=Mock(side_effect=load), unload=Mock(side_effect=unload),
+                                 exports_sync=SimpleNamespace(poll=Mock(side_effect=poll), stop=Mock(side_effect=stop)))
+        session = SimpleNamespace(on=Mock(side_effect=lambda name, callback: callbacks.__setitem__(name, callback)),
+                                  create_script=Mock(return_value=script), detach=Mock(side_effect=forbidden))
+        self.frida.attach.side_effect = None
+        self.frida.attach.return_value = session
+        self.discovery.process_ids.return_value = [42]
+        self.runtime.prepare.side_effect = None
+        self.runtime.prepare.return_value = ({'pid': 42}, {'query': {
+            'core_sha256': hashlib.sha256(SOURCE.with_suffix('.c').read_bytes()).hexdigest()}})
+        return script, session, trace
+
+    def test_poll_timeout_then_exit_during_stop_is_clean_and_skips_unload(self):
+        for text in ('script has been destroyed', 'script is destroyed'):
+            with self.subTest(message=text):
+                script, session, trace = self.closing_transport(destroyed_message=text)
+                code, status, report = self.run_host()
+                self.assertEqual(code, 0)
+                self.assertEqual(status['phase'], 'game_closed')
+                self.assertEqual(report['result']['stats']['cycles'], 7)
+                self.assertEqual([row['phase'] for row in report['rpc_interruptions']], ['poll', 'stop'])
+                self.assertNotIn('script_unloaded', report['cleanup'])
+                script.unload.assert_not_called()
+                session.detach.assert_not_called()
+
+    def test_exit_during_unload_keeps_transport_diagnostics_without_false_failure(self):
+        for text in ('script has been destroyed', 'script is destroyed'):
+            with self.subTest(message=text):
+                script, session, trace = self.closing_transport('unload', destroyed_message=text)
+                code, status, report = self.run_host()
+                self.assertEqual(code, 0)
+                self.assertEqual([row['phase'] for row in report['rpc_interruptions']], ['poll', 'unload'])
+                self.assertNotIn('script_unloaded', report['cleanup'])
+                session.detach.assert_not_called()
+
+    def test_confirmed_exit_does_not_hide_faults_or_other_disconnects(self):
+        cases = [dict(native_fault=True), dict(phase='poll', crash='access violation'),
+                 dict(phase='poll', reason='connection-terminated'),
+                 dict(phase='unload_clean', stop_fault=True), dict(phase='unload_clean', cleanup_fault=True), dict(phase='unload_clean', js_fault=True)]
+        for options in cases:
+            with self.subTest(options=options):
+                script, session, trace = self.closing_transport(**options)
+                with redirect_stdout(io.StringIO()):code = self.runtime._live(self.args)
+                report = json.loads(self.args.output.read_text(encoding='utf-8'))
+                self.assertEqual(code, 1)
+                self.assertFalse(report['ok'])
+                if options.get('native_fault'):
+                    self.assertTrue(any('Native runtime disabled' in error for error in report['errors']))
+                if options.get('js_fault'):
+                    self.assertTrue(any('script fault before exit' in error for error in report['errors']))
+                session.detach.assert_not_called()
+
+    def test_stopped_payload_from_poll_or_send_survives_target_exit(self):
+        for phase in ('poll_stopped', 'send_stopped'):
+            for fault in ('stop_fault', 'cleanup_fault'):
+                with self.subTest(phase=phase, fault=fault):
+                    script, session, trace = self.closing_transport(phase, **{fault: True})
+                    with redirect_stdout(io.StringIO()):code = self.runtime._live(self.args)
+                    report = json.loads(self.args.output.read_text(encoding='utf-8'))
+                    self.assertEqual(code, 1)
+                    self.assertFalse(report['ok'])
+                    self.assertEqual(report['result']['stats']['cycles'], 8)
+                    self.assertTrue(report['cleanup']['stop_rpc']['errors'] or report['cleanup']['stop_rpc']['cleanup_errors'])
+                    script.unload.assert_not_called()
+                    session.detach.assert_not_called()
+
+    def test_nontransport_poll_fault_survives_confirmed_process_exit(self):
+        for error in (ValueError('poll payload bug'), RuntimeError('arbitrary runtime fault'), RuntimeError('RPCException: JavaScript bug'),
+                      RuntimeError('InvalidOperationError: unrelated invalid API operation'),
+                      RuntimeError('RuntimeError: InvalidOperationError: arbitrary nested fault')):
+            with self.subTest(error=error):
+                self.closing_transport('poll', poll_error=error)
+                with redirect_stdout(io.StringIO()):code = self.runtime._live(self.args)
+                report = json.loads(self.args.output.read_text(encoding='utf-8'))
+                self.assertEqual(code, 1)
+                self.assertTrue(report['errors'])
+                self.assertFalse(report.get('rpc_interruptions'))
+
+    def test_bounded_backend_transport_wrapper_is_classified_narrowly(self):
+        script, session, trace = self.closing_transport('poll',
+                poll_error=RuntimeError('InvalidOperationError: script has been destroyed'))
+        code, status, report = self.run_host()
+        self.assertEqual(code, 0)
+        self.assertEqual([row['phase'] for row in report['rpc_interruptions']], ['poll'])
+        script.unload.assert_not_called()
+        session.detach.assert_not_called()
 
     def test_process_terminated_during_poll_skips_dead_process_cleanup(self):
         callbacks = {}

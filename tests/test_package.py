@@ -12,6 +12,19 @@ RUNTIME_FILES=('autoloot_runtime.py','autoloot_runtime.c','autoloot_runtime.js',
                'runtime_paths.py','control.py')
 
 class PackageTests(unittest.TestCase):
+    def test_builder_manifest_and_native_case_count_match_sources(self):
+        tree = ast.parse((ROOT/'tools/build_installer.py').read_text(encoding='utf-8'))
+        manifest = {}
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id in ('TOOLS', 'NATIVE_CASE_COUNT'):
+                manifest[node.targets[0].id] = ast.literal_eval(node.value)
+        self.assertTrue(set(RUNTIME_FILES) | {'manage.ps1', 'DIAGNOSTIC.md'} <= set(manifest['TOOLS']))
+        runtime = ast.parse((ROOT/'tools/autoloot_runtime.py').read_text(encoding='utf-8'))
+        modes = next(ast.literal_eval(node.value) for node in ast.walk(runtime)
+                     if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                     and node.targets[0].id == 'modes' and isinstance(node.value, ast.List))
+        self.assertEqual(manifest['NATIVE_CASE_COUNT'], len(modes))
+
     def test_runtime_inputs_present(self):
         for name in RUNTIME_FILES:
             with self.subTest(name=name):self.assertTrue((ROOT/'tools'/name).is_file())

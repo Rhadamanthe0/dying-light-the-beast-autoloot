@@ -20,6 +20,9 @@ static void exceed_budget(void){diag_qpc+=(runtime_config[10]*9+999)/1000;}
 gboolean read_memory(gpointer process,gconstpointer from,gpointer to,gsize size,gsize*got){gboolean okay;
  if(progression_clock()&&(guint64)from==0x12345000){*got=0;return FALSE;}
  okay=ReadProcessMemory(process,from,to,size,got);
+ if(load(controls+4)==31&&((guint64)from==cfg[7]+0x508||(guint64)from==cfg[26]+0x508)){*got=0;return FALSE;}
+ if(load(controls+4)==27&&stats[8]>0&&((guint64)from==cfg[7]+0x4c8||(guint64)from==cfg[7]+0x388)){*got=0;return FALSE;}
+ if(load(controls+4)==23&&stats[8]>0&&((guint64)from==*(guint64*)(cfg[7]+0x38)+8||(guint64)from==*(guint64*)(cfg[7]+0x38)+0x48)){*got=0;return FALSE;}
  if(load(controls+4)==15&&(guint64)from==cfg[7]+0x5f0)exceed_budget();return okay;
 }
 guint64 clock_now(void){if(progression_clock())return 1000+(guint64)load(controls+6)+diag_qpc*1000/runtime_config[10];
@@ -51,10 +54,20 @@ gint select(gpointer component,gpointer ctx){guint64 h;stats[4]++;
  if(!load(controls+5)){h=*(guint64*)(*(guint64*)((guint8*)component+0x598)+0x28);*(guint*)(h+0x239c)=123;}
  if(load(controls+4)==13){guint64 matrix=(guint64)component==cfg[9]?cfg[15]:cfg[23];*(float*)(matrix+12)=2.01f;}
  if(load(controls+4)==16&&(guint64)component==cfg[9])exceed_budget();
+ if(load(controls+4)==20)(*(guint64*)((component==(gpointer)cfg[9]?cfg[7]:cfg[26])+0x600))++;
+ if(load(controls+4)==21)(*(guint64*)((component==(gpointer)cfg[9]?cfg[7]:cfg[26])+0x630))++;
+ if(load(controls+4)==22)(*(guint64*)(*(guint64*)((component==(gpointer)cfg[9]?cfg[7]:cfg[26])+0x38)+8))++;
+ if(load(controls+4)==29)*(guint*)((component==(gpointer)cfg[9]?cfg[7]:cfg[26])+0x508)=1;
+ if(load(controls+4)==30)*(guint*)((component==(gpointer)cfg[9]?cfg[7]:cfg[26])+0x4d0)=0;
+ if(load(controls+4)==28)*(guint64*)((component==(gpointer)cfg[9]?cfg[7]:cfg[26])+0x5e8)=1;
+ if(load(controls+4)==25){guint64 body=component==(gpointer)cfg[9]?cfg[7]:cfg[26];
+  guint64 desc=*(guint64*)(body+(load(controls+5)==3?0x630:0x3c0));*(guint8*)(desc+0x3c2)|=0x40;}
  block(2);return load(controls+3);
 }
 guint8 eligibility(gpointer component,gint action,gpointer ctx){stats[6]++;
  if(action!=1||(guint64)ctx!=cfg[14]||((guint64)component!=cfg[9]&&(guint64)component!=cfg[28]))stats[7]++;
+ if(load(controls+4)==26){guint64 body=component==(gpointer)cfg[9]?cfg[7]:cfg[26];
+  guint64 desc=*(guint64*)(body+(load(controls+5)==3?0x630:0x3c0));*(guint8*)(desc+0x3c2)|=0x40;}
  block(4);return load(controls+4)==2?0:0x81;
 }
 guint8 dispatch(gpointer player,guint64 handle,gpointer ctx){guint64 component,human,body;stats[8]++;
@@ -63,7 +76,7 @@ guint8 dispatch(gpointer player,guint64 handle,gpointer ctx){guint64 component,h
  if(load(controls+5)){
    body=component==cfg[9]?cfg[7]:cfg[26];block(3);
    if(load(controls+4)==10)return 0; /* Internal re-selection changedTake1 toSwap24: vanilla rejects. */
-   if(load(controls+4)!=3){if(load(controls+5)==2){*(guint*)(body+0x4d0)=0;*(guint*)(body+0x388)=5;}else *(guint8*)(body+0x4f0)|=1;}stats[15]++;return 1;
+   if(load(controls+4)!=3&&load(controls+4)!=23){if(load(controls+5)==3)*(guint64*)(*(guint64*)(body+0x38)+0x48)=0;else if(load(controls+5)==2||load(controls+5)==4){*(guint*)(body+0x4d0)=0;*(guint*)(body+0x388)=5;}else *(guint8*)(body+0x4f0)|=1;}stats[15]++;return 1;
  }
  human=*(guint64*)(*(guint64*)(component+0x598)+0x28);body=*(guint64*)(human+0x2558);
  block(3);if(load(controls+4)!=3&&load(controls+4)!=8){*(guint*)(body+0x4d0)=0;*(guint*)(body+0x388)=5;}
@@ -74,9 +87,10 @@ guint8 query(gpointer level,gpointer vector,gpointer centre,float radius,gpointe
  if((guint64)level!=cfg[29]||(guint64)type!=cfg[30]||radius!=2.0f||flag||optional||
     c[0]!=0||c[1]!=0||c[2]!=0||(v[0]&0xffffffffffffULL)!=(guint64)((guint8*)vector+8)||*(guint16*)((guint8*)vector+6)!=0x0101)stats[11]++;
  block(5);if(load(controls+4)==4)Sleep(320);
+ if(load(controls+4)==24)n=16;
  if(load(controls+4)==5)n=0;if(load(controls+4)==6)n=18;if(load(controls+4)==18)n=10;
  if(n){data=HeapAlloc(GetProcessHeap(),0,n*8);stats[12]++;
-   for(i=0;i<n;i++)data[i]=i&1?cfg[26]+0x10:cfg[7]+0x10;
+   for(i=0;i<n;i++)data[i]=load(controls+4)==24?*(guint64*)(cfg[31]+8*i):i&1?cfg[26]+0x10:cfg[7]+0x10;
    if(load(controls+4)==14)data[0]=0x12345010;
    if(load(controls+4)==18){for(i=0;i<8;i++)data[i]=0;data[8]=0x12345010;data[9]=cfg[26]+0x10;}
    v[0]=(guint64)data&0xffffffffffffULL;((guint*)vector)[2]=n;((guint*)vector)[3]=n;
@@ -122,7 +136,7 @@ const cm=new CModule(coreSource,{runtime_config:runtimeConfig,cfg:bindingCfg,sta
  player_dispatch:fixture.dispatch,find_radius:fixture.query,vector_destroy:fixture.destroy});
 const disable=new NativeFunction(cm.disable,'void',[]),pending=new NativeFunction(cm.pending,'uint',[]),snap=new NativeFunction(cm.snapshot,'uint',['pointer']);
 const size=new NativeFunction(cm.state_size,'uint',[])(),snapSize=new NativeFunction(cm.snapshot_size,'uint',[])();
-if(size>32768||snapSize!==13312)throw new Error('Unexpected runtime layout');
+if(size>32768||snapSize!==14080)throw new Error('Unexpected runtime layout');
 const snapBuffer=Memory.alloc(snapSize),createThread=new NativeFunction(address('CreateThread'),'pointer',['pointer','size_t','pointer','pointer','uint','pointer']);
 const wait=new NativeFunction(address('WaitForSingleObject'),'uint',['pointer','uint']),close=new NativeFunction(address('CloseHandle'),'bool',['pointer']);
 const image=Memory.alloc(0x3707000),player=Memory.alloc(0x4000),player2=Memory.alloc(0x4000),game=Memory.alloc(0x200),level=Memory.alloc(0xf00),client=Memory.alloc(0x100);
@@ -136,9 +150,10 @@ function transform(object,x){const obj=Memory.alloc(0x150),t=Memory.alloc(0x30),
  q(page.add(0x58),matrix);q(page.add(0x70),matrix);q(page.add(0x80),flags);flags.writeU8(4);
  [1,0,0,x,0,1,0,0,0,0,1,0].forEach((v,i)=>matrix.add(i*4).writeFloat(v));matrices.push({object,obj,t,page,matrix,flags});}
 transform(player,0);transform(player2,0);
-for(let i=0;i<2;i++){const s={body:Memory.alloc(0x620),human:Memory.alloc(0x2870),entity:Memory.alloc(0x90),strategy:Memory.alloc(0x40),manager:Memory.alloc(8),handles:Memory.alloc(16),
- component:storage.add(i*0x4000+0x180),handle:uint64('0x52e1c4f400000018').add(i*0x400)};sources.push(s);transform(s.body,1+i*0.5);}
+for(let i=0;i<2;i++){const s={body:Memory.alloc(0x970),human:Memory.alloc(0x2870),entity:Memory.alloc(0x90),strategy:Memory.alloc(0x40),manager:Memory.alloc(8),handles:Memory.alloc(16),
+ component:storage.add(i*0x4000+0x180),description:Memory.alloc(0x400),handle:uint64('0x52e1c4f400000018').add(i*0x400)};sources.push(s);transform(s.body,1+i*0.5);}
 for(let i=0;i<2;i++)groundMeta.push({proxy:storage.add(i*0x4000+0x780),handle:sources[i].handle.add(0x60),node:Memory.alloc(24),table:Memory.alloc(24),records:Memory.alloc(72)});
+const diagnosticBodies=Array.from({length:16},()=>Memory.alloc(64)),diagnosticTable=Memory.alloc(128);
 function initialize(mode){
  diag.writeByteArray(new Uint8Array(32));diagCounts.writeByteArray(new Uint8Array(64));diagQpc.writeU64(0);
  if(mode==='prequery_concurrency')diag.add(24).writeS32(1);
@@ -161,6 +176,7 @@ function initialize(mode){
  const s=sources[0],t=sources[1];[player,game,gameSlot,image,level,client,client,s.body,s.human,s.component,s.strategy,s.manager,image.add(0x37069b0),s.handle,ctx,0,pool,storage,s.entity,s.handles,s.handles,1,0,2,1,2000,t.body,t.handle,t.component,ilevel,typeObj,t.handles].forEach((v,i)=>n(cfg.add(i*8),v));
  [player,game,gameSlot,image,level,client,client,image,vector,ctx,frequency,0,0,1].forEach((v,i)=>n(runtimeConfig.add(i*8),v));
  if(mode==='far')matrices[2].matrix.add(12).writeFloat(2.01);if(mode==='near2')matrices[2].matrix.add(12).writeFloat(2);
+ if(mode==='unknown_class')sources.forEach(a=>q(a.body,image.add(0x29ed590)));
  if(mode==='dirty')matrices[2].flags.writeU8(6);if(mode==='wrong_handle')n(s.component.add(8),s.handle.add(1));
  if(mode==='forwarding')n(s.component.add(0x450),1);if(mode==='extra')q(s.human.add(0x2858),s.body);
  if(mode==='mode')s.body.add(0x508).writeU32(0);if(mode==='nested')q(s.body.add(0x570),s.body);
@@ -174,9 +190,14 @@ function initialize(mode){
  if(mode==='bounded_logs'){controls.add(28).writeS32(1);controls.add(12).writeS32(0x17);}
  const progressionMode=['unreadable_first','slow_bind_first','slow_action_first','budget_before_candidate','tail_rotation','budget_after_dispatch'].indexOf(mode);
  if(progressionMode>=0){controls.add(16).writeS32(14+progressionMode);controls.add(28).writeS32(1);n(runtimeConfig.add(80),1000000);}
+ if(mode==='diagnostic_only'||mode==='diagnostic_mix')[11,13,14,15].forEach(i=>n(runtimeConfig.add(i*8),0));
+ if(mode==='diagnostic_mix'){
+  controls.add(16).writeS32(24);q(cfg.add(31*8),diagnosticTable);
+  diagnosticBodies.forEach((b,i)=>{q(b,image.add(0x100000+i*16));q(diagnosticTable.add(i*8),b.add(0x10));});
+ }
  if(mode==='ambiguous'){n(s.handles.add(8),s.handle);s.entity.add(0x80).writeU32(2);}
 
- if(mode.startsWith('ground_')||mode.startsWith('container_')){
+ if(mode.startsWith('ground_')||mode.startsWith('container_')||mode.startsWith('dropped_')||mode.startsWith('bag_')||mode.startsWith('resource_')){
   controls.add(20).writeS32(1);n(runtimeConfig.add(11*8),1);n(runtimeConfig.add(12*8),1);n(runtimeConfig.add(13*8),0);
   image.add(0x2d326f8+0x128).writePointer(image.add(0x24ec9b6));image.add(0x257b948).writePointer(image.add(0xfba70));image.add(0x27ecee0+8).writePointer(image.add(0x80cb40));
   for(let i=0;i<2;i++){const a=sources[i],m=groundMeta[i],pg=storage.add(i*0x4000);
@@ -190,6 +211,33 @@ function initialize(mode){
    n(m.table.add(8),m.records);m.table.add(0x10).writeU32(3);
    [['0x53139e0185c9a12f',0x16e8c20],['0xcbbfaec882b2a3ea',0x16e9040],['0x5f2b7eb72fee8475',0x16e8cd0]].forEach(([guid,rva],j)=>{n(m.records.add(j*24),uint64(guid));q(m.records.add(j*24+8),image.add(rva));m.records.add(j*24+16).writeS32(0x20);});
   }
+  if(mode.startsWith('dropped_')){
+   controls.add(20).writeS32(3);n(runtimeConfig.add(15*8),1);n(runtimeConfig.add(11*8),0);
+   q(image.add(0x296ed88+0x620),image.add(0xd6c570));q(image.add(0x296ed88+0x628),image.add(0xdee670));
+   sources.forEach(a=>{q(a.body,image.add(0x296ed88));q(a.body.add(0x10),image.add(0x296f460));q(a.body.add(0x20),image.add(0x296f738));q(a.body.add(0x628),image.add(0x289aaf0));});
+   if(mode==='dropped_swap')controls.add(12).writeS32(24);
+   if(mode==='dropped_full')controls.add(16).writeS32(2);
+   if(mode==='dropped_no_progress')controls.add(16).writeS32(3);
+   if(mode==='dropped_header_changed')controls.add(16).writeS32(20);
+   if(mode==='dropped_desc_changed')controls.add(16).writeS32(21);
+   if(mode==='dropped_generation_changed')controls.add(16).writeS32(22);
+   if(mode==='dropped_post_unreadable')controls.add(16).writeS32(23);
+   if(mode==='dropped_disabled')n(runtimeConfig.add(15*8),0);
+   if(mode==='dropped_callback')groundMeta.forEach(m=>q(m.records.add(56),image.add(0x16e8cd1)));
+  }
+  for(const a of sources){
+   const dropped=mode.startsWith('dropped_'),inlineOffset=dropped?0x628:0x3b8;
+   q(a.body.add(inlineOffset),image.add(0x289aaf0));q(a.body.add(inlineOffset+8),a.description);
+   q(a.description,image.add(0x2886458));a.description.add(0x3c2).writeU8(0);
+   q(image.add(0x2886458+0x12a8),image.add(0x174c40));
+   q(image.add(0x28a13a0+0x12a8),image.add(0xa305a0));
+   if(mode.endsWith('_opportunity')||mode.endsWith('_opportunity_changed')||mode.endsWith('_ordinary_throwable')||mode.endsWith('_unknown_getter')||mode.endsWith('_canuse_opportunity_changed'))q(a.description,image.add(0x28a13a0));
+   if(mode.endsWith('_opportunity'))a.description.add(0x3c2).writeU8(0x40);
+   if(mode.endsWith('_unknown_getter'))q(image.add(0x28a13a0+0x12a8),image.add(0xa305a1));
+   if(mode.endsWith('_unreadable_desc'))q(a.body.add(inlineOffset+8),ptr('0x12345000'));
+  }
+  if(mode.endsWith('_opportunity_changed'))controls.add(16).writeS32(25);
+  if(mode.endsWith('_canuse_opportunity_changed'))controls.add(16).writeS32(26);
   if(mode==='ground_swap')controls.add(12).writeS32(24);
   if(mode==='ground_swap_during_dispatch')controls.add(16).writeS32(10);
   if(mode==='ground_forward')sources.forEach(a=>a.body.add(0x2a0).writeU8(1));
@@ -201,10 +249,59 @@ function initialize(mode){
   if(mode==='ground_continuous'){n(runtimeConfig.add(12*8),0);controls.add(16).writeS32(7);}
   if(mode==='ground_receiver_generation'){n(runtimeConfig.add(12*8),0);controls.add(16).writeS32(11);}
   if(mode==='ground_no_progress'){n(runtimeConfig.add(12*8),0);controls.add(16).writeS32(3);}
-  if(mode.startsWith('container_')){
+  if(mode.startsWith('bag_')){
+   controls.add(20).writeS32(4);n(runtimeConfig.add(11*8),0);n(runtimeConfig.add(14*8),1);
+   q(image.add(0x29e9950+0x20),image.add(0x1185870));
+   q(image.add(0x29e84f0+0x620),image.add(0x1121590));q(image.add(0x29e84f0+0x628),image.add(0x11936c0));
+   sources.forEach(a=>{q(a.body,image.add(0x29e84f0));q(a.body.add(0x10),image.add(0x29e8c38));q(a.body.add(0x20),image.add(0x29e8f10));q(a.body.add(0x3d8),image.add(0x29e9950));a.body.add(0x59e).writeU8(0x6f);a.body.add(0x508).writeU32(2);a.body.add(0x4d0).writeU32(3);q(a.body.add(0x5e8),NULL);q(a.body.add(0x5f0),NULL);});
+   if(mode==='bag_empty')sources.forEach(a=>a.body.add(0x4d0).writeU32(0));
+   if(mode==='bag_iloot')sources.forEach(a=>q(a.body.add(0x3d8),image.add(0x29e8448)));
+   if(mode==='bag_post_unreadable')controls.add(16).writeS32(27);
+   if(mode==='bag_human_changed')controls.add(16).writeS32(28);
+   if(mode==='bag_mode1')sources.forEach(a=>a.body.add(0x508).writeU32(1));
+   if(mode==='bag_human_control')sources.forEach(a=>q(a.body.add(0x5e8),a.human));
+   if(mode==='bag_human_reciprocal')sources.forEach(a=>q(a.body.add(0x5f0),a.human.add(0x70)));
+   if(mode==='bag_strategy')sources.forEach(a=>q(a.component.add(0x598),a.strategy));
+   if(mode==='bag_wrong_owner')sources.forEach((a,i)=>q(a.component.add(0x10),sources[1-i].entity));
+   if(mode==='bag_wrong_receiver')groundMeta.forEach(m=>q(m.node.add(0x10),NULL));
+   if(mode==='bag_generation_changed')controls.add(16).writeS32(22);
+   if(mode==='bag_other_action')controls.add(12).writeS32(24);
+   if(mode==='bag_full')controls.add(16).writeS32(2);
+   if(mode==='bag_nested')sources.forEach(a=>q(a.body.add(0x570),a.body));
+   if(mode==='bag_no_progress')controls.add(16).writeS32(3);
+   if(mode==='bag_corpse_no_rescue'){n(runtimeConfig.add(13*8),1);sources.forEach(a=>q(a.body.add(0x5f0),a.human.add(0x70)));}
+   if(mode==='bag_callback')groundMeta.forEach(m=>q(m.records.add(56),image.add(0x16e8cd1)));
+  }
+  if(mode.startsWith('container_')||mode.startsWith('resource_')){
    controls.add(20).writeS32(2);n(runtimeConfig.add(11*8),0);n(runtimeConfig.add(14*8),1);
    image.add(0x29e8448+0x20).writePointer(image.add(0x1185870));
    for(const a of sources){q(a.body,image.add(0x29e6ff8));q(a.body.add(0x10),image.add(0x29e7730));q(a.body.add(0x20),image.add(0x29e7a08));q(a.body.add(0x3d8),image.add(0x29e8448));a.body.add(0x59e).writeU8(0x2f);a.body.add(0x4c8).writeByteArray(new Uint8Array(16));a.body.add(0x4d0).writeU32(3);}
+   if(mode.startsWith('resource_')){
+    q(image.add(0x29e6ff8+0x620),image.add(0x1121810));q(image.add(0x29e6ff8+0x628),image.add(0x1194280));
+    sources.forEach(a=>{a.body.add(0x508).writeU32(2);a.body.add(0x4d0).writeU32(1);});
+    if(mode==='resource_mode_unreadable')controls.add(16).writeS32(31);
+    if(mode==='resource_vfunc')q(image.add(0x29e6ff8+0x628),image.add(0x1194281));
+    if(mode==='resource_multiple')sources.forEach(a=>a.body.add(0x4d0).writeU32(3));
+    if(mode==='resource_empty')sources.forEach(a=>a.body.add(0x4d0).writeU32(0));
+    if(mode==='resource_count_limit')sources.forEach(a=>a.body.add(0x4d0).writeU32(512));
+    if(mode==='resource_count_overflow')sources.forEach(a=>a.body.add(0x4d0).writeU32(513));
+    if(mode==='resource_mode1')sources.forEach(a=>a.body.add(0x508).writeU32(1));
+    if(mode==='resource_mode_invalid')sources.forEach(a=>a.body.add(0x508).writeU32(0));
+    if(mode==='resource_wrong_state')sources.forEach(a=>a.body.add(0x388).writeU32(2));
+    if(mode==='resource_nested')sources.forEach(a=>q(a.body.add(0x570),a.body));
+    if(mode==='resource_flag')sources.forEach(a=>a.body.add(0x59e).writeU8(0x27));
+    if(mode==='resource_iloot')sources.forEach(a=>q(a.body.add(0x3d8),image.add(0x29e8440)));
+    if(mode==='resource_callback')groundMeta.forEach(m=>q(m.records.add(56),image.add(0x16e8cd1)));
+    if(mode==='resource_wrong_owner')sources.forEach((a,i)=>q(a.component.add(0x10),sources[1-i].entity));
+    if(mode==='resource_strategy')sources.forEach(a=>q(a.component.add(0x598),a.strategy));
+    if(mode==='resource_generation_changed')controls.add(16).writeS32(22);
+    if(mode==='resource_full')controls.add(16).writeS32(2);
+    if(mode==='resource_swap')controls.add(12).writeS32(24);
+    if(mode==='resource_no_progress')controls.add(16).writeS32(3);
+    if(mode==='resource_post_unreadable')controls.add(16).writeS32(27);
+    if(mode==='resource_mode_changed')controls.add(16).writeS32(29);
+    if(mode==='resource_count_changed')controls.add(16).writeS32(30);
+   }
    if(mode==='container_wrong_state')sources.forEach(a=>a.body.add(0x388).writeU32(2));
    if(mode==='container_other_action')controls.add(12).writeS32(7);
    if(mode==='container_context')controls.add(16).writeS32(12);
@@ -244,7 +341,8 @@ q(tickAddress,wrapper);
 
 const original=Array.from(new Uint8Array(fixture.tick.readByteArray(16)));let listener=null,handles=[],workers=[],joined=true;
 function allJoined(){if(handles.some(h=>wait(h,0)!==0))return false;handles.forEach(h=>close(h));handles=[];joined=true;return true;}
-function snapshot(){const okay=snap(snapBuffer)!==0;return {snapshot_available:okay,values:okay?Array.from({length:50},(_,i)=>snapBuffer.add(i*8).readU64().toString()):[],
+function snapshot(){const okay=snap(snapBuffer)!==0;return {snapshot_available:okay,values:okay?Array.from({length:64},(_,i)=>snapBuffer.add(i*8).readU64().toString()):[],
+ candidates:okay?Array.from({length:16},(_,i)=>Array.from({length:6},(_,j)=>snapBuffer.add((64+64*16+64*5+64*4+i*6+j)*8).readU64().toString())):[],
  events:okay?Array.from({length:Math.min(snapBuffer.add(13*8).readU64().toNumber(),64)},(_,i)=>Array.from({length:16},(_,j)=>snapBuffer.add((64+i*16+j)*8).readU64().toString())):[],
  cadence:okay?Array.from({length:Math.min(snapBuffer.add(15*8).readU64().toNumber(),64)},(_,i)=>Array.from({length:5},(_,j)=>snapBuffer.add((64+64*16+i*5+j)*8).readU64().toString())):[],
  vector_lifecycle:Array.from({length:8},(_,i)=>diagCounts.add(i*8).readU64().toNumber()),stats:Array.from({length:16},(_,i)=>fixtureStats.add(i*8).readU64().toNumber()),blocked:controls.add(4).readS32(),

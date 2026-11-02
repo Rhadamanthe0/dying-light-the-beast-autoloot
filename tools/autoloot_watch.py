@@ -187,7 +187,7 @@ class WindowsBackend:
         if self.args.worker_log.exists() and self.args.worker_log.stat().st_size > 2 * 1024 * 1024:
             os.replace(self.args.worker_log, self.args.worker_log.with_suffix('.log.old'))
         command = [str(self.pythonw), str(ROOT / 'tools/autoloot_runtime.py'), '--live', '--pid', str(proof['pid']),
-                   '--session', str(session_path), '--ground-items', '--containers', '--launch-token', token,
+                   '--session', str(session_path), '--ground-items', '--containers', '--dropped-items', '--launch-token', token,
                    '--status', str(self.args.runtime_status), '--stop-file', str(self.args.stop_file),
                    '--pause-file', str(self.args.pause_file),
                    '--output', str(self.args.status.with_name('watch-runtime.json'))]

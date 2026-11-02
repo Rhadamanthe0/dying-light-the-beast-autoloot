@@ -47,3 +47,6 @@
 /.github/workflows/*
 !/.github/workflows/tests.yml
 !/.github/workflows/release.yml
+
+!/tools/DIAGNOSTIC.md
+!/tests/test_native_inspection.py
