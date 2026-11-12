@@ -41,7 +41,7 @@ typedef struct {
   guint64 event_extra[64][4];
   guint64 container_dispatches,container_completed,container_refused,bag_dispatches,bag_completed,bag_refused,resource_dispatches,resource_completed,resource_refused;
   guint8 item_context[80],item_opportunity_flags;guint64 item_description_vtable,item_opportunity_getter,dropped_dispatches,dropped_changed,dropped_refused;
-  guint64 candidates[16][6],candidate_total,candidate_cursor;
+  guint64 candidates[16][6],candidate_total,candidate_cursor,cbs_proxy_vtable;
 } State;
 extern State state;
 typedef struct {gpointer player;} Invocation;
@@ -105,16 +105,16 @@ static gboolean guard_body(Witness *w) {
   guint64 v,body_control,human_control; guint8 bytes[48], packed[16]; guint count,i; float d,dist=0;
   state.reason=1;
   QEQ(cfg[GAME_SLOT],cfg[GAME]);
-  if (!is_type(cfg[GAME],0x259fe08) || !is_type(cfg[PLAYER],0x259c450)) return FALSE;
+  if (!is_type(cfg[GAME],RVA_GAME_PRIMARY) || !is_type(cfg[PLAYER],RVA_GAME_PLAYER_PRIMARY)) return FALSE;
   QEQ(cfg[GAME]+0x138,cfg[LEVEL]); QEQ(cfg[LEVEL]+0xec8,cfg[CLIENT]);
   QEQ(cfg[CLIENT]+0x88,cfg[GATE]); QEQ(cfg[CLIENT]+0x90,cfg[PLAYER]);
   state.reason=2;
-  if (!is_type(cfg[BODY],0x29e84f0) || !is_type(cfg[HUMAN],0x2962618) ||
-      !is_type(cfg[COMPONENT],0x293c8c0) || !is_type(cfg[STRATEGY],0x2a6fda0) || !pool_guard()) return FALSE;
+  if (!is_type(cfg[BODY],RVA_GAME_BODY_PRIMARY) || !is_type(cfg[HUMAN],RVA_GAME_HUMAN_PRIMARY) ||
+      !is_type(cfg[COMPONENT],RVA_GAME_COMPONENT_PRIMARY) || !is_type(cfg[STRATEGY],RVA_GAME_STRATEGY_PRIMARY) || !pool_guard()) return FALSE;
   QEQ(cfg[COMPONENT]+0x598,cfg[STRATEGY]); QEQ(cfg[STRATEGY]+0x28,cfg[HUMAN]);
   QEQ(cfg[HUMAN]+0x10,cfg[ENTITY]); QEQ(cfg[COMPONENT]+0x10,cfg[ENTITY]);
-  if (!rpm(cfg[BASE]+0x2a6fda0+0x2e8,bytes,40) || u64(bytes)!=cfg[BASE]+0x147e190 ||
-      u64(bytes+8)!=cfg[BASE]+0x149dd40 || u64(bytes+32)!=cfg[BASE]+0x1492690) return FALSE;
+  if (!rpm(cfg[BASE]+RVA_GAME_STRATEGY_PRIMARY+0x2e8,bytes,40) || u64(bytes)!=cfg[BASE]+RVA_GAME_STRATEGY_CALLBACK_2E8 ||
+      u64(bytes+8)!=cfg[BASE]+RVA_GAME_STRATEGY_CALLBACK_2F0 || u64(bytes+32)!=cfg[BASE]+RVA_GAME_STRATEGY_CALLBACK_308) return FALSE;
   state.reason=3;
   if (!q(cfg[HUMAN]+0x2550,&human_control) || !human_control ||
       !q(cfg[BODY]+0x5e8,&body_control) || !body_control) return FALSE;
@@ -160,8 +160,8 @@ static gboolean budget(void){guint64 now;QueryPerformanceCounter((gint64*)&now);
 static gboolean checkpoint(void){return !stopped()&&!state.limit_reached&&!budget()&&atomic_get(&state.inflight)==1;}
 static gboolean local_guard(void){guint64 v;
   QEQ(cfg[GAME_SLOT],cfg[GAME]);
-  if(!is_type(cfg[PLAYER],0x259c450)||!is_type(cfg[GAME],0x259fe08))return FALSE;
-  QEQ(cfg[PLAYER]+0x20,cfg[BASE]+0x259d100);
+  if(!is_type(cfg[PLAYER],RVA_GAME_PLAYER_PRIMARY)||!is_type(cfg[GAME],RVA_GAME_PRIMARY))return FALSE;
+  QEQ(cfg[PLAYER]+0x20,cfg[BASE]+RVA_GAME_PLAYER_IGS);
   QEQ(cfg[GAME]+0x138,cfg[LEVEL]);QEQ(cfg[LEVEL]+0xec8,cfg[CLIENT]);
   QEQ(cfg[CLIENT]+0x88,cfg[GATE]);QEQ(cfg[CLIENT]+0x90,cfg[PLAYER]);return TRUE;
 }
@@ -170,9 +170,9 @@ static gboolean bind_body(guint64 body){
   guint count,i,offset;guint8 vector[16],contents[16];
   cfg[SOURCE_KIND]=0;cfg[BODY]=body;cfg[HUMAN]=cfg[HANDLE]=cfg[COMPONENT]=0;
   state.reason=20;
-  if(!is_type(body,0x29e84f0)||!q(body+0x5f0,&reciprocal)||reciprocal<0x10070)return FALSE;
+  if(!is_type(body,RVA_GAME_BODY_PRIMARY)||!q(body+0x5f0,&reciprocal)||reciprocal<0x10070)return FALSE;
   cfg[HUMAN]=reciprocal-0x70;
-  if(!is_type(cfg[HUMAN],0x2962618)||!q(cfg[HUMAN]+0x10,&cfg[ENTITY])||
+  if(!is_type(cfg[HUMAN],RVA_GAME_HUMAN_PRIMARY)||!q(cfg[HUMAN]+0x10,&cfg[ENTITY])||
      !rpm(cfg[ENTITY]+0x78,vector,16)||!q(cfg[POOL_SLOT],&cfg[POOL])||!rpm(cfg[POOL],poolwords,16))return FALSE;
   cfg[STORAGE]=poolwords[0];packed=u64(vector);count=vector[7]?vector[7]-1:u32(vector+8);
   if(!count||count>128)return FALSE;
@@ -184,8 +184,8 @@ static gboolean bind_body(guint64 body){
     if(offset>=poolwords[1]||offset<0x70)continue;
     component=cfg[STORAGE]+offset;
     if(!q(component,&v))return FALSE;
-    if(v!=cfg[BASE]+0x293c8c0)continue;
-    if(!q(component+0x598,&strategy)||!is_type(strategy,0x2a6fda0)||!q(strategy+0x28,&owner))return FALSE;
+    if(v!=cfg[BASE]+RVA_GAME_COMPONENT_PRIMARY)continue;
+    if(!q(component+0x598,&strategy)||!is_type(strategy,RVA_GAME_STRATEGY_PRIMARY)||!q(strategy+0x28,&owner))return FALSE;
     if(owner!=cfg[HUMAN])continue;
     if(found++) {state.reason=22;return FALSE;} /* Ambiguous exact owner: fail closed. */
     cfg[HANDLE]=handle;cfg[COMPONENT]=component;cfg[STRATEGY]=strategy;cfg[COMPONENT_INDEX]=i;
@@ -205,9 +205,9 @@ static gboolean item_callbacks(void){
   if(count>128)return FALSE;
   for(i=0;i<count;i+=8){guint n=count-i<8?count-i:8;if(!rpm(data+24*i,b,n*24))return FALSE;
     for(j=0;j<n;j++){guint bit=0;guint rva=0;guid=u64(b+24*j);fn=u64(b+24*j+8);copy(&delta,b+24*j+16,4);
-      if(guid==0x53139e0185c9a12fULL){bit=1;rva=0x16e8c20;}
-      if(guid==0xcbbfaec882b2a3eaULL){bit=2;rva=0x16e9040;}
-      if(guid==0x5f2b7eb72fee8475ULL){bit=4;rva=0x16e8cd0;}
+      if(guid==0x53139e0185c9a12fULL){bit=1;rva=RVA_GAME_RECEIVER_CALLBACK_5313;}
+      if(guid==0xcbbfaec882b2a3eaULL){bit=2;rva=RVA_GAME_RECEIVER_CALLBACK_CBBF;}
+      if(guid==0x5f2b7eb72fee8475ULL){bit=4;rva=RVA_GAME_RECEIVER_CALLBACK_5F2B;}
       if(bit){if((mask&bit)||fn!=cfg[BASE]+rva||delta!=0x20)return FALSE;mask|=bit;seen++;}
     }
   }
@@ -219,32 +219,37 @@ static gboolean inventory_item(gboolean binding){
   guint8 context[80],flag=0;guint64 description,vt,getter;guint i;
   state.reason=44;
   if(!rpm(cfg[BODY]+(cfg[SOURCE_KIND]==1?0x380:0x5f0),context,80)||
-     u64(context+56)!=cfg[BASE]+0x289aaf0)return FALSE;
+     u64(context+56)!=cfg[BASE]+RVA_GAME_INVENTORY_CONTEXT_TABLE)return FALSE;
   if(!binding)for(i=0;i<80;i++)if(context[i]!=state.item_context[i])return FALSE;
   description=u64(context+64);
   if(!q(description,&vt)||!q(vt+0x12a8,&getter))return FALSE;
   if(!binding&&(vt!=state.item_description_vtable||getter!=state.item_opportunity_getter))return FALSE;
-  if(getter==cfg[BASE]+0xa305a0){if(!rpm(description+0x3c2,&flag,1))return FALSE;}
-  else if(getter!=cfg[BASE]+0x174c40)return FALSE;
+  if(getter==cfg[BASE]+RVA_GAME_OPPORTUNITY_FLAG){if(!rpm(description+0x3c2,&flag,1))return FALSE;}
+  else if(getter!=cfg[BASE]+RVA_GAME_OPPORTUNITY_FALSE)return FALSE;
   if(!binding&&flag!=state.item_opportunity_flags)return FALSE;
   if(flag&0x40){state.reason=45;return FALSE;}
   if(binding){copy(state.item_context,context,80);state.item_description_vtable=vt;
     state.item_opportunity_getter=getter;state.item_opportunity_flags=flag;}
   return TRUE;
 }
+static gboolean proxy_vtable_allowed(guint64 value){
+  guint64 game=cfg[BASE]+RVA_GAME_PROXY_PRIMARY,model=cfg[BASE]+RVA_GAME_MODEL_PROXY_PRIMARY;
+  return value==game||(model!=game&&value==model);
+}
 static gboolean guard_cbs(Witness*w){
   guint64 v;guint8 vector[16],flag,forwarding[24];guint count,i,primary,control,igs;float d,dist=0;
-  switch(cfg[SOURCE_KIND]){case 1:primary=0x29ec228;control=0x29ec8f0;igs=0x29ecbc8;break;
-    case 2:primary=0x29e6ff8;control=0x29e7730;igs=0x29e7a08;break;
-    case 3:primary=0x296ed88;control=0x296f460;igs=0x296f738;break;
-    case 4:primary=0x29e84f0;control=0x29e8c38;igs=0x29e8f10;break;
-    case 5:primary=0x29e6ff8;control=0x29e7730;igs=0x29e7a08;break;default:return FALSE;}
+  switch(cfg[SOURCE_KIND]){case 1:primary=RVA_GAME_ITEM_PRIMARY;control=RVA_GAME_ITEM_CONTROL;igs=RVA_GAME_ITEM_IGS;break;
+    case 2:primary=RVA_GAME_CONTAINER_PRIMARY;control=RVA_GAME_CONTAINER_CONTROL;igs=RVA_GAME_CONTAINER_IGS;break;
+    case 3:primary=RVA_GAME_DROPPED_PRIMARY;control=RVA_GAME_DROPPED_CONTROL;igs=RVA_GAME_DROPPED_IGS;break;
+    case 4:primary=RVA_GAME_BODY_PRIMARY;control=RVA_GAME_BODY_CONTROL;igs=RVA_GAME_BODY_IGS;break;
+    case 5:primary=RVA_GAME_CONTAINER_PRIMARY;control=RVA_GAME_CONTAINER_CONTROL;igs=RVA_GAME_CONTAINER_IGS;break;default:return FALSE;}
   state.reason=40;
-  if(!local_guard()||!is_type(cfg[BODY],primary)||!is_type(cfg[PROXY],0x2d326f8)||
-     !is_type(cfg[COMPONENT],0x293c8c0)||!pool_guard()||!pool_pair(cfg[PROXY],cfg[RECEIVER_HANDLE]))return FALSE;
+  if(!local_guard()||!is_type(cfg[BODY],primary)||!proxy_vtable_allowed(state.cbs_proxy_vtable)||
+     !q(cfg[PROXY],&v)||v!=state.cbs_proxy_vtable||
+     !is_type(cfg[COMPONENT],RVA_GAME_COMPONENT_PRIMARY)||!pool_guard()||!pool_pair(cfg[PROXY],cfg[RECEIVER_HANDLE]))return FALSE;
   QEQ(cfg[BODY]+0x10,cfg[BASE]+control);QEQ(cfg[BODY]+0x20,cfg[BASE]+igs);
   QEQ(cfg[BODY]+0x38,cfg[PROXY]);QEQ(cfg[PROXY]+0x10,cfg[ENTITY]);QEQ(cfg[PROXY]+0x48,cfg[BODY]+0x20);
-  QEQ(cfg[BASE]+0x2d326f8+0x128,cfg[BASE]+0x24ec9b6);QEQ(cfg[BASE]+0x257b948,runtime_config[7]+0xfba70);
+  QEQ(state.cbs_proxy_vtable+0x128,cfg[BASE]+RVA_GAME_PROXY_TARGET_THUNK);QEQ(cfg[BASE]+RVA_GAME_PROXY_TARGET_IMPORT,runtime_config[7]+RVA_ENGINE_PROXY_TARGET);
   QEQ(cfg[COMPONENT]+0x10,cfg[ENTITY]);QEQ(cfg[COMPONENT]+0x598,0);
   if(!rpm(cfg[COMPONENT]+0x448,forwarding,24)||u64(forwarding)!=~0ULL||u64(forwarding+8)||u64(forwarding+16))return FALSE;
   if(!rpm(cfg[ENTITY]+0x78,vector,16)||u64(vector)!=cfg[VECTOR_PACKED])return FALSE;
@@ -252,26 +257,26 @@ static gboolean guard_cbs(Witness*w){
   if(count!=cfg[VECTOR_COUNT]||count>128||cfg[COMPONENT_INDEX]>=count)return FALSE;
   QEQ(cfg[VECTOR_DATA]+cfg[COMPONENT_INDEX]*8,cfg[HANDLE]);
   if(cfg[SOURCE_KIND]==4){state.reason=46;QEQ(cfg[BODY]+0x5e8,0);QEQ(cfg[BODY]+0x5f0,0);
-    QEQ(cfg[BASE]+primary+0x620,cfg[BASE]+0x1121590);QEQ(cfg[BASE]+primary+0x628,cfg[BASE]+0x11936c0);}
-  if(cfg[SOURCE_KIND]==5){QEQ(cfg[BASE]+primary+0x620,cfg[BASE]+0x1121810);QEQ(cfg[BASE]+primary+0x628,cfg[BASE]+0x1194280);}
+    QEQ(cfg[BASE]+primary+0x620,cfg[BASE]+RVA_GAME_BAG_CAN_USE);QEQ(cfg[BASE]+primary+0x628,cfg[BASE]+RVA_GAME_BAG_TAKE);}
+  if(cfg[SOURCE_KIND]==5){QEQ(cfg[BASE]+primary+0x620,cfg[BASE]+RVA_GAME_CONTAINER_CAN_USE);QEQ(cfg[BASE]+primary+0x628,cfg[BASE]+RVA_GAME_CONTAINER_TAKE);}
   state.reason=41;
-  QEQ(cfg[COMPONENT]+0x70,cfg[BASE]+0x27ecf30);QEQ(cfg[COMPONENT]+0x78,cfg[SENDER_NODE]);
+  QEQ(cfg[COMPONENT]+0x70,cfg[BASE]+RVA_GAME_SENDER_TABLE);QEQ(cfg[COMPONENT]+0x78,cfg[SENDER_NODE]);
   QEQ(cfg[SENDER_NODE],0);QEQ(cfg[SENDER_NODE]+8,cfg[RECEIVER_HANDLE]);QEQ(cfg[SENDER_NODE]+0x10,cfg[BODY]+0x270);
-  QEQ(cfg[BODY]+0x270,cfg[BASE]+0x27ecee0);QEQ(cfg[BASE]+0x27ecee0+8,cfg[BASE]+0x80cb40);
+  QEQ(cfg[BODY]+0x270,cfg[BASE]+RVA_GAME_RECEIVER_TABLE);QEQ(cfg[BASE]+RVA_GAME_RECEIVER_TABLE+8,cfg[BASE]+RVA_GAME_GROUND_MESSAGE_WRAPPER);
   QEQ(cfg[BODY]+0x280,cfg[BODY]+0x268);QEQ(cfg[BODY]+0x278,cfg[RECEIVER_TABLE]);
   if(!rpm(cfg[BODY]+0x2a0,&flag,1)||flag||!item_callbacks())return FALSE;
   if((cfg[SOURCE_KIND]==1||cfg[SOURCE_KIND]==3)&&!inventory_item(FALSE))return FALSE;
   state.reason=42;
   switch(cfg[SOURCE_KIND]){
     case 3:
-      QEQ(cfg[BASE]+primary+0x620,cfg[BASE]+0xd6c570);QEQ(cfg[BASE]+primary+0x628,cfg[BASE]+0xdee670);
+      QEQ(cfg[BASE]+primary+0x620,cfg[BASE]+RVA_GAME_DROPPED_CAN_USE);QEQ(cfg[BASE]+primary+0x628,cfg[BASE]+RVA_GAME_DROPPED_TAKE);
       w->count=1;w->body_state=0;break;
     case 1:if(!rpm(cfg[BODY]+0x4f0,&flag,1)||(flag&1))return FALSE;w->count=1;w->body_state=flag;cfg[EXPECTED_COUNT]=flag;break;
     case 2:case 4:case 5:
       if(!rpm(cfg[BODY]+0x59e,&flag,1)||!(flag&8)||!rpm(cfg[BODY]+0x508,&state.take_mode,4)||state.take_mode!=(cfg[SOURCE_KIND]==2?1:2)||
          !q(cfg[BODY]+0x570,&state.nested_container)||state.nested_container)return FALSE;
-      QEQ(cfg[BODY]+0x3d8,cfg[BASE]+(cfg[SOURCE_KIND]==4?0x29e9950:0x29e8448));
-      QEQ(cfg[BASE]+(cfg[SOURCE_KIND]==4?0x29e9950:0x29e8448)+0x20,cfg[BASE]+0x1185870);
+      QEQ(cfg[BODY]+0x3d8,cfg[BASE]+(cfg[SOURCE_KIND]==4?RVA_GAME_BODY_LOOT:RVA_GAME_CONTAINER_LOOT));
+      QEQ(cfg[BASE]+(cfg[SOURCE_KIND]==4?RVA_GAME_BODY_LOOT:RVA_GAME_CONTAINER_LOOT)+0x20,cfg[BASE]+RVA_GAME_CONTAINER_TAKE_ALL);
       if(!rpm(cfg[BODY]+0x4c8,vector,16)||!rpm(cfg[BODY]+0x388,&w->body_state,4)||w->body_state!=1)return FALSE;
       w->count=vector[7]?vector[7]-1:u32(vector+8);if(w->count>512||w->count!=cfg[EXPECTED_COUNT])return FALSE;break;
     default:return FALSE;
@@ -284,18 +289,20 @@ static gboolean guard_cbs(Witness*w){
 static gboolean guard(Witness*w){switch(cfg[SOURCE_KIND]){case 0:return guard_body(w);case 1:case 2:case 3:case 4:case 5:return guard_cbs(w);default:return FALSE;}}
 static gboolean bind_cbs(guint64 item,guint kind){
   guint64 v,poolwords[2],packed,handle,c,owner;guint8 vec[16];guint count,i,offset,found=0,primary;
-  switch(kind){case 1:primary=0x29ec228;break;case 2:primary=0x29e6ff8;break;case 3:primary=0x296ed88;break;case 4:primary=0x29e84f0;break;case 5:primary=0x29e6ff8;break;default:return FALSE;}
+  state.cbs_proxy_vtable=0;
+  switch(kind){case 1:primary=RVA_GAME_ITEM_PRIMARY;break;case 2:primary=RVA_GAME_CONTAINER_PRIMARY;break;case 3:primary=RVA_GAME_DROPPED_PRIMARY;break;case 4:primary=RVA_GAME_BODY_PRIMARY;break;case 5:primary=RVA_GAME_CONTAINER_PRIMARY;break;default:return FALSE;}
   cfg[SOURCE_KIND]=kind;cfg[BODY]=item;cfg[HUMAN]=cfg[PROXY]=cfg[HANDLE]=cfg[COMPONENT]=0;
   if(kind==4){state.reason=46;if(!q(item+0x5e8,&v)||v||!q(item+0x5f0,&v)||v)return FALSE;}
   state.reason=43;
-  if(!is_type(item,primary)||!q(item+0x38,&cfg[PROXY])||!is_type(cfg[PROXY],0x2d326f8)||
-     !q(cfg[PROXY]+0x10,&cfg[ENTITY])||!rpm(cfg[ENTITY]+0x78,vec,16)||!q(cfg[POOL_SLOT],&cfg[POOL])||!rpm(cfg[POOL],poolwords,16))return FALSE;
+  if(!is_type(item,primary)||!q(item+0x38,&cfg[PROXY])||!q(cfg[PROXY],&v)||!proxy_vtable_allowed(v))return FALSE;
+  state.cbs_proxy_vtable=v;
+  if(!q(cfg[PROXY]+0x10,&cfg[ENTITY])||!rpm(cfg[ENTITY]+0x78,vec,16)||!q(cfg[POOL_SLOT],&cfg[POOL])||!rpm(cfg[POOL],poolwords,16))return FALSE;
   cfg[HUMAN]=cfg[PROXY];cfg[STORAGE]=poolwords[0];packed=u64(vec);count=vec[7]?vec[7]-1:u32(vec+8);
   if(!count||count>128)return FALSE;
   cfg[VECTOR_PACKED]=packed;cfg[VECTOR_DATA]=packed&0xffffffffffffULL;cfg[VECTOR_COUNT]=count;
   for(i=0;i<count;i++){if(!checkpoint())return FALSE;if(!q(cfg[VECTOR_DATA]+i*8,&handle))return FALSE;
     offset=(guint)(handle<<4);if(offset<0x70||offset>=poolwords[1])continue;c=cfg[STORAGE]+offset;
-    if(!q(c,&v))return FALSE;if(v!=cfg[BASE]+0x293c8c0)continue;
+    if(!q(c,&v))return FALSE;if(v!=cfg[BASE]+RVA_GAME_COMPONENT_PRIMARY)continue;
     if(!q(c+0x10,&owner)||owner!=cfg[ENTITY]||!q(c+0x598,&v))return FALSE;if(v)continue;
     if(found++)return FALSE;cfg[COMPONENT]=c;cfg[HANDLE]=handle;cfg[COMPONENT_INDEX]=i;
   }
@@ -317,7 +324,7 @@ static gboolean bind_container(guint64 item){guint mode;
 static gboolean ground_context(void){guint8*ctx=p(CONTEXT);
   return u64(ctx)==cfg[PLAYER]+0x1b0&&u32(ctx+8)==0&&ctx[0x18]==0x20;}
 static Post post_item(void){Post out={0};guint64 v;guint8 flag;
-  if(!q(cfg[BODY],&v)||v!=cfg[BASE]+0x29ec228)out.invalidated|=1;
+  if(!q(cfg[BODY],&v)||v!=cfg[BASE]+RVA_GAME_ITEM_PRIMARY)out.invalidated|=1;
   if(!q(cfg[PROXY]+8,&v)||v!=cfg[RECEIVER_HANDLE])out.invalidated|=2;
   if(!q(cfg[PROXY]+0x48,&v)||v!=cfg[BODY]+0x20)out.invalidated|=4;
   if(rpm(cfg[BODY]+0x4f0,&flag,1)){out.ground_flags=flag;out.body_state=flag;out.valid=1;}
@@ -346,9 +353,9 @@ static void cool(gint slot,guint milliseconds,guint failed){Cooldown*c=&state.co
   c->body=cfg[BODY];c->human=cfg[HUMAN];c->handle=cfg[HANDLE];c->receiver_handle=cfg[SOURCE_KIND]?cfg[RECEIVER_HANDLE]:0;
   c->until=GetTickCount64()+milliseconds;c->failed=failed;}
 static Post post(void){Post out={0,0,0};guint8 b[16];
-  if((cfg[SOURCE_KIND]==0&&(!is_type(cfg[BODY],0x29e84f0)||!is_type(cfg[HUMAN],0x2962618)))||
-     ((cfg[SOURCE_KIND]==2||cfg[SOURCE_KIND]==5)&&!is_type(cfg[BODY],0x29e6ff8))||
-     (cfg[SOURCE_KIND]==4&&!is_type(cfg[BODY],0x29e84f0))||!is_type(cfg[PLAYER],0x259c450)||
+  if((cfg[SOURCE_KIND]==0&&(!is_type(cfg[BODY],RVA_GAME_BODY_PRIMARY)||!is_type(cfg[HUMAN],RVA_GAME_HUMAN_PRIMARY)))||
+     ((cfg[SOURCE_KIND]==2||cfg[SOURCE_KIND]==5)&&!is_type(cfg[BODY],RVA_GAME_CONTAINER_PRIMARY))||
+     (cfg[SOURCE_KIND]==4&&!is_type(cfg[BODY],RVA_GAME_BODY_PRIMARY))||!is_type(cfg[PLAYER],RVA_GAME_PLAYER_PRIMARY)||
      !rpm(cfg[BODY]+0x4c8,b,16)||!rpm(cfg[BODY]+0x388,&out.body_state,4))return out;
   out.count=b[7]?b[7]-1:u32(b+8);out.valid=out.count<=512;return out;
 }
@@ -425,10 +432,10 @@ static void cycle(void){
   state.reason=0;state.status=2;state.thread_id=GetCurrentThreadId();state.cycles++;
   QueryPerformanceCounter((gint64*)&begin);
   for(i=7;i<32;i++)cfg[i]=0;
-  cfg[POOL_SLOT]=cfg[BASE]+0x37069b0;cfg[CONTEXT]=runtime_config[9];cfg[RADIUS_MM]=COLLECTION_RADIUS_MM;
+  cfg[POOL_SLOT]=cfg[BASE]+RVA_GAME_CBS_POOL_SLOT;cfg[CONTEXT]=runtime_config[9];cfg[RADIUS_MM]=COLLECTION_RADIUS_MM;
   if(!checkpoint()||!local_guard()||!vector_canaries()||!canaries()||!position(cfg[PLAYER],centre))goto finish;
   if(!q(cfg[PLAYER]+0x40,&a)||!q(a+0x48,&b)||!b||!q(b+0x6d8,&level)||!level||
-     !q(runtime_config[7]+0x260ebf8,&type)||!type||!q(type,&a)||!a)goto finish;
+     !q(runtime_config[7]+RVA_ENGINE_CONTROL_TYPE_SLOT,&type)||!type||!q(type,&a)||!a)goto finish;
   for(i=0;i<16;i++)v[i]=0;*(guint64*)v=(runtime_config[8]+8)&0xffffffffffffULL;*(guint16*)(v+6)=0x0101;initialized=TRUE;
   if(!checkpoint())goto destroy;
   QueryPerformanceCounter((gint64*)&query_start);state.queries++;
@@ -450,10 +457,10 @@ destroy:
     processed++;
     if(raw[i]<0x10010)continue;
     {guint64 vt;if(!q(raw[i]-0x10,&vt))break;
-      if(vt==cfg[BASE]+0x29ec228&&runtime_config[11]){if(bind_cbs(raw[i]-0x10,1))goto bound;}
-      else if(vt==cfg[BASE]+0x296ed88&&runtime_config[15]){if(bind_cbs(raw[i]-0x10,3))goto bound;}
-      else if(vt==cfg[BASE]+0x29e6ff8&&runtime_config[14]){if(bind_container(raw[i]-0x10))goto bound;}
-      else if(vt==cfg[BASE]+0x29e84f0&&(runtime_config[13]||runtime_config[14])){
+      if(vt==cfg[BASE]+RVA_GAME_ITEM_PRIMARY&&runtime_config[11]){if(bind_cbs(raw[i]-0x10,1))goto bound;}
+      else if(vt==cfg[BASE]+RVA_GAME_DROPPED_PRIMARY&&runtime_config[15]){if(bind_cbs(raw[i]-0x10,3))goto bound;}
+      else if(vt==cfg[BASE]+RVA_GAME_CONTAINER_PRIMARY&&runtime_config[14]){if(bind_container(raw[i]-0x10))goto bound;}
+      else if(vt==cfg[BASE]+RVA_GAME_BODY_PRIMARY&&(runtime_config[13]||runtime_config[14])){
         if(runtime_config[13]&&bind_body(raw[i]-0x10))goto bound;
         if(runtime_config[14]&&bind_cbs(raw[i]-0x10,4))goto bound;}
       else {candidate(raw[i]-0x10,vt,0,0);continue;}
@@ -479,9 +486,9 @@ finish:
 static gboolean refresh_local(void){
   guint64 game,level,client,gate,player,v;
   cfg[BASE]=runtime_config[3];cfg[GAME_SLOT]=runtime_config[2];
-  if(!q(cfg[GAME_SLOT],&game)||!is_type(game,0x259fe08)||!q(game+0x138,&level)||
+  if(!q(cfg[GAME_SLOT],&game)||!is_type(game,RVA_GAME_PRIMARY)||!q(game+0x138,&level)||
      !q(level+0xec8,&client)||!q(client+0x88,&gate)||!gate||!q(client+0x90,&player)||
-     !is_type(player,0x259c450))return FALSE;
+     !is_type(player,RVA_GAME_PLAYER_PRIMARY))return FALSE;
   if(cfg[PLAYER]!=player||cfg[GAME]!=game||cfg[LEVEL]!=level){
     guint n;state.next_offset=0;state.cooldown_cursor=0;
     for(n=0;n<64;n++){state.cooldowns[n].body=0;state.cooldowns[n].human=0;state.cooldowns[n].handle=0;state.cooldowns[n].receiver_handle=0;state.cooldowns[n].until=0;state.cooldowns[n].failed=0;}

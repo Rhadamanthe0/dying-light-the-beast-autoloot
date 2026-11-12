@@ -1,11 +1,46 @@
 'use strict';
 // Resident native100ms runtime. No JS executes inside game callbacks.
 const config=__QUERY_CONFIG__,coreSource=__QUERY_CORE__;
+const rvas=config.rvas;
 const INTERVAL_MS=100,RADIUS_METRES=2;
 const hold={cfg:null,bindingCfg:null,state:null,vectorBlock:null,contextBlock:null,snapshot:null,module:null,listener:null};
 let target=null,original=null,timer=null,stopped=null,pendingStop=null,frequency=0;
 let nativeSnapshot=null,nativePending=null,nativeDisable=null;
 const errors=[];
+function validateExecutionProfile(){
+  const trial=config.trial_181;
+  const hashes={game:'4f421509f28881c4dd8a744c06d5ccab28017422224809814eeaef127dd075a1',engine:'000fcc064bd512a93cb2eaa6da5f34dcba4e792ba636a897a4630b5637d2c0d4'};
+  if(trial===undefined||trial===null){
+    const known={'1.7.1.0na':{game:'ddb68c8f87ba2afd0e561b2d1adb9235467c29069fb1cd1619db81e1056378eb',engine:'3dcae152c002f1d549df2ed12c21cc38ddb6b25fd989345f0c413c7442243f1b'},'1.8.1.0na':hashes};
+    const expected=Object.prototype.hasOwnProperty.call(known,config.profile_id)?known[config.profile_id]:null;
+    if(config.execution_mode!=='resident'||!expected||!config.profile_hashes||
+      Object.keys(config.profile_hashes).sort().join(',')!=='engine,game'||
+      config.profile_hashes.game!==expected.game||config.profile_hashes.engine!==expected.engine||
+      config.game_sha256!==expected.game||!config.engine_module||config.engine_module.sha256!==expected.engine)
+      throw new Error('Reviewed profile/hash pair and resident mode required');
+    return;
+  }
+  const keys=['category','dispatch_cap','duration_ms','hashes','kind','mode','profile_id'];
+  if(config.execution_mode!=='trial-181'||config.profile_id!=='1.8.1.0na'||
+    typeof trial!=='object'||Array.isArray(trial)||Object.keys(trial).sort().join(',')!==keys.join(',')||
+    trial.kind!=='bounded_trial_181_v1'||trial.profile_id!==config.profile_id||
+    !trial.hashes||Object.keys(trial.hashes).sort().join(',')!=='engine,game'||trial.hashes.game!==hashes.game||trial.hashes.engine!==hashes.engine||
+    !config.profile_hashes||Object.keys(config.profile_hashes).sort().join(',')!=='engine,game'||config.profile_hashes.game!==hashes.game||config.profile_hashes.engine!==hashes.engine||
+    config.game_sha256!==hashes.game||!config.engine_module||config.engine_module.sha256!==hashes.engine)
+    throw new Error('Trial181 contract identity differs');
+  if(!Number.isSafeInteger(trial.duration_ms)||trial.duration_ms<1||trial.duration_ms>30000||config.duration_ms!==trial.duration_ms)
+    throw new Error('Trial181 contract duration differs');
+  if(trial.mode!=='diagnostic-only'&&trial.mode!=='collect')throw new Error('Trial181 contract mode differs');
+  if(!Number.isSafeInteger(trial.dispatch_cap)||(trial.mode==='diagnostic-only'?trial.dispatch_cap!==0:trial.dispatch_cap<1||trial.dispatch_cap>64))
+    throw new Error('Trial181 contract dispatch cap differs');
+  const routes={corpses:['0','1','1','0','0'],ground:['1','1','0','0','0'],dropped:['0','1','0','0','1'],containers:['0','1','0','1','0']};
+  if(typeof trial.category!=='string'||!Object.prototype.hasOwnProperty.call(routes,trial.category)||(trial.mode==='diagnostic-only'&&trial.category!=='corpses'))
+    throw new Error('Trial181 contract category differs');
+  const values=trial.mode==='diagnostic-only'?['0','0','0','0','0']:routes[trial.category];
+  values[1]=String(trial.dispatch_cap);
+  if(!Array.isArray(config.values)||config.values.length!==16||!values.every((value,index)=>config.values[11+index]===value))
+    throw new Error('Trial181 contract routes or dispatch cap differ');
+}
 function bytes(p,n){return Array.from(new Uint8Array(p.readByteArray(n)));}
 function hex(p,n){return bytes(p,n).map(v=>v.toString(16).padStart(2,'0')).join('');}
 function normal(p){return p.replace(/\//g,'\\').toLowerCase();}
@@ -68,6 +103,7 @@ try{
   if(Frida.version!=='17.24.0'||Script.runtime!=='QJS'||Process.arch!=='x64'||Process.platform!=='windows'||
     Process.pointerSize!==8||Process.id!==config.pid||config.duration_ms<0||config.duration_ms>86400000||
     config.interval_ms!==INTERVAL_MS||config.radius_metres!==RADIUS_METRES||config.phase!=='player-update')throw new Error('Reviewed runtime/one-shot identity required');
+  validateExecutionProfile();
   const kernel=Process.getModuleByName('kernel32.dll'),address=n=>kernel.getExportByName(n);
   const times=Memory.alloc(32),getTimes=new NativeFunction(address('GetProcessTimes'),'bool',Array(5).fill('pointer'));
   if(!getTimes(ptr('0xffffffffffffffff'),times,times.add(8),times.add(16),times.add(24))||
@@ -82,11 +118,11 @@ try{
   for(const guard of config.prologues){const module=guard.module==='engine'?engine:game;
     if(!Number.isSafeInteger(guard.rva)||guard.rva<0||guard.rva+guard.hex.length/2>module.size||
       hex(module.base.add(guard.rva),guard.hex.length/2)!==guard.hex)throw new Error('Code guard mismatch: '+guard.name);}
-  const update=config.prologues.filter(g=>g.module!=='engine'&&g.rva===0x12cc7a0);
+  const update=config.prologues.filter(g=>g.module!=='engine'&&g.rva===rvas.GAME_PLAYER_UPDATE);
   if(update.length!==1||update[0].hex!=='40534883ec4080b9003c000000488d81')throw new Error('Exact PlayerUpdate guard required');
-  target=game.base.add(0x12cc7a0);original=update[0].hex;
+  target=game.base.add(rvas.GAME_PLAYER_UPDATE);original=update[0].hex;
   const player=ptr(config.player_instance),localGame=ptr(config.game_instance);
-  if(!player.readPointer().equals(game.base.add(0x259c450))||!localGame.readPointer().equals(game.base.add(0x259fe08)))
+  if(!player.readPointer().equals(game.base.add(rvas.GAME_PLAYER_PRIMARY))||!localGame.readPointer().equals(game.base.add(rvas.GAME_PRIMARY)))
     throw new Error('Current Player/Game identity changed');
   const qpfOut=Memory.alloc(8),qpf=new NativeFunction(address('QueryPerformanceFrequency'),'bool',['pointer']);
   if(!qpf(qpfOut)||qpfOut.readS64().toNumber()<=0)throw new Error('QPC frequency unavailable');
@@ -110,9 +146,9 @@ try{
   hold.module=new CModule(coreSource,{runtime_config:hold.cfg,cfg:hold.bindingCfg,state:hold.state,
     ReadProcessMemory:address('ReadProcessMemory'),GetTickCount64:address('GetTickCount64'),
     GetCurrentThreadId:address('GetCurrentThreadId'),QueryPerformanceCounter:address('QueryPerformanceCounter'),
-    find_radius:engine.base.add(0xf3ab0),vector_destroy:game.base.add(0x1731f0),
-    context_ctor:game.base.add(0x1727890),get_component:engine.base.add(0x4515c0),
-    select_action:game.base.add(0xca1ac0),can_use:game.base.add(0xc88470),player_dispatch:game.base.add(0x12d9aa0)});
+    find_radius:engine.base.add(rvas.ENGINE_FIND_RADIUS),vector_destroy:game.base.add(rvas.GAME_VECTOR_DESTRUCTOR),
+    context_ctor:game.base.add(rvas.GAME_CONTEXT_CTOR),get_component:engine.base.add(rvas.ENGINE_GET_COMPONENT),
+    select_action:game.base.add(rvas.GAME_GET_ACTION),can_use:game.base.add(rvas.GAME_CAN_USE),player_dispatch:game.base.add(rvas.GAME_PLAYER_DISPATCH)});
   const cm=hold.module,stateSize=new NativeFunction(cm.state_size,'uint',[])();
   const snapshotSize=new NativeFunction(cm.snapshot_size,'uint',[])();
   if(stateSize>32768||snapshotSize!==14080)throw new Error('Native runtime layout mismatch');

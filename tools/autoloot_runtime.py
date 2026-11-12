@@ -26,6 +26,7 @@ from types import SimpleNamespace
 from runtime_control import SingleInstance, AlreadyRunning, clear_stale_stop
 from inspect_native import Image
 import discover_session as discovery
+from runtime_profile import PROFILE_171, select_profile, profile_digest, compiled_core, fixture_image_size, profile_by_name, require_live_profile, make_trial_181
 
 
 def launch(function):
@@ -48,36 +49,65 @@ lifecycle=SimpleNamespace(launch=launch,bounded=bounded)
 class _StopRequested(Exception):pass
 
 
+def core_source(profile=None):
+    return compiled_core(Path(__file__).with_suffix('.c').read_text(encoding='utf-8'),profile)
+
+
+def qualification_binding(profile=None):
+    profile=PROFILE_171 if profile is None else profile
+    return {'profile_id':profile['id'],'profile_sha256':profile_digest(profile),
+            'core_sha256':hashlib.sha256(core_source(profile).encode('utf-8')).hexdigest(),
+            'fixture_sha256':hashlib.sha256((ROOT/'tools/autoloot_runtime_fixture.js').read_bytes()).hexdigest()}
+
+
 def static_proof():
     game=Image(discovery.BIN/discovery.GAME_DLL);engine=Image(discovery.BIN/discovery.ENGINE_DLL)
-    if hashlib.sha256(game.data).hexdigest()!=discovery.HASHES['game'] or hashlib.sha256(engine.data).hexdigest()!=discovery.HASHES['engine']:
-        raise ValueError('Reviewed game/engine images required')
+    profile=select_profile(hashlib.sha256(game.data).hexdigest(),hashlib.sha256(engine.data).hexdigest())
     guards=[]
-    for name,module,rva in [('FindObjectsInRadius','engine',0xf3ab0),('RadiusImpl','engine',0xb812c0),
-                             ('GetLevel','engine',0x82e3d0),('VectorDestructor','game',0x1731f0),
-                             ('ContextCtor','game',0x1727890),('GetComponentImpl','engine',0x4515c0),
-                             ('GetAction','game',0xca1ac0),('CanUse','game',0xc88470),('PlayerDispatch','game',0x12d9aa0),
-                             ('BagCanUse','game',0x1121590),('BagTake','game',0x11936c0),('GroundMessageWrapper','game',0x80cb40),('GroundItemTake','game',0x11944b0),('DroppedCanUse','game',0xd6c570),('DroppedTake','game',0xdee670),('DroppedInventoryTake','game',0xe1a1c0),('OpportunityFalse','game',0x174c40),('OpportunityFlag','game',0xa305a0),('OpportunityContext','game',0xa305b0),('ProxyTargetThunk','game',0x24ec9b6),('ContainerCanUse','game',0x1121810),('ContainerTake','game',0x1194280),('ContainerTakeAll','game',0x1185870)]:
+    for name,address_key in [
+        ('FindObjectsInRadius','ENGINE_FIND_RADIUS'), ('RadiusImpl','ENGINE_RADIUS_IMPL'),
+        ('GetLevel','ENGINE_GET_LEVEL'), ('VectorDestructor','GAME_VECTOR_DESTRUCTOR'),
+        ('ContextCtor','GAME_CONTEXT_CTOR'), ('GetComponentImpl','ENGINE_GET_COMPONENT'),
+        ('GetAction','GAME_GET_ACTION'), ('CanUse','GAME_CAN_USE'),
+        ('PlayerDispatch','GAME_PLAYER_DISPATCH'), ('BagCanUse','GAME_BAG_CAN_USE'),
+        ('BagTake','GAME_BAG_TAKE'), ('GroundMessageWrapper','GAME_GROUND_MESSAGE_WRAPPER'),
+        ('GroundItemTake','GAME_GROUND_TAKE'), ('DroppedCanUse','GAME_DROPPED_CAN_USE'),
+        ('DroppedTake','GAME_DROPPED_TAKE'), ('DroppedInventoryTake','GAME_DROPPED_INVENTORY_TAKE'),
+        ('OpportunityFalse','GAME_OPPORTUNITY_FALSE'), ('OpportunityFlag','GAME_OPPORTUNITY_FLAG'),
+        ('OpportunityContext','GAME_OPPORTUNITY_CONTEXT'), ('ProxyTargetThunk','GAME_PROXY_TARGET_THUNK'),
+        ('ContainerCanUse','GAME_CONTAINER_CAN_USE'), ('ContainerTake','GAME_CONTAINER_TAKE'),
+        ('ContainerTakeAll','GAME_CONTAINER_TAKE_ALL')]:
+        module=address_key.split('_',1)[0].lower();rva=profile['rvas'][address_key]
         image=game if module=='game' else engine;offset=image.offset(rva)
         guards.append({'name':name,'module':module,'rva':rva,'hex':image.data[offset:offset+16].hex()})
-    return {'function_guards':guards,'game_sha256':discovery.HASHES['game'],'engine_sha256':discovery.HASHES['engine'],
-            'core_sha256':hashlib.sha256(Path(__file__).with_suffix('.c').read_bytes()).hexdigest(),
+    return {'function_guards':guards,'game_sha256':profile['hashes']['game'],'engine_sha256':profile['hashes']['engine'],
+            **qualification_binding(profile),'profile':profile,
             'interval_ms':INTERVAL_MS,'radius_metres':RADIUS_METRES,'page_size':8,'budget_ms_between_calls':8,'rpm_limit':4096}
 
 
-def prepare(session_path=None,duration=0,pid=None,ground_items=False,max_dispatches=0,ground_only=False,containers=False,containers_only=False,dropped_items=False,diagnostic_only=False):
+def prepare(session_path=None,duration=0,pid=None,ground_items=False,max_dispatches=0,ground_only=False,containers=False,containers_only=False,dropped_items=False,diagnostic_only=False,trial_181=False,trial_category=None):
     if type(max_dispatches) is not int or not 0<=max_dispatches<=1000000:raise ValueError('max_dispatches must be0..1000000')
+    if type(trial_181) is not bool:raise ValueError('Trial181 marker must be boolean')
+    if trial_category is not None and not trial_181:raise ValueError('Trial category requires --trial-181')
+    if trial_181 and any((ground_items,ground_only,containers,containers_only,dropped_items)):
+        raise ValueError('Trial181 forbids legacy collection flags; use its explicit category')
+    if trial_181 and (max_dispatches!=0 if diagnostic_only else not 1<=max_dispatches<=64):
+        raise ValueError('Trial181 requires cap0 for diagnosis or an integer cap1..64 for collection')
     if frida.__version__!='17.24.0':raise ValueError('Reviewed Frida17.24.0 required')
     if not 0<=duration<=86400:raise ValueError('Duration must be0(resident)..86400s')
     static=static_proof()
-    qualification=json.loads((ROOT/'evidence/autoloot-runtime-dummy.json').read_text())
-    if qualification.get('passed') is not True or qualification.get('core_sha256')!=static['core_sha256']:
+    trial=make_trial_181(static['profile'],duration,diagnostic_only,'corpses' if trial_category is None else trial_category,max_dispatches) if trial_181 else None
+    require_live_profile(static['profile'],trial,'trial-181' if trial else 'resident')
+    qualification=json.loads(qualification_path(static['profile']).read_text())
+    if qualification.get('passed') is not True or any(qualification.get(key)!=static[key] for key in ('profile_id','profile_sha256','core_sha256','fixture_sha256')):
         raise ValueError('Current runtime has no matching successful owned-fixture qualification; run --dummy')
     current=discovery.validate_session(session_path,max_age_seconds=120) if session_path else discovery.discover(pid)
     if not current.get('ready'):raise ValueError('Current local player not ready')
     game=current['modules']['game'];engine=current['modules']['engine'];identity=current['process_identity'];chain=current['chain']
-    if game['sha256']!=discovery.HASHES['game'] or engine['sha256']!=discovery.HASHES['engine']:raise ValueError('Exact reviewed module hashes required')
-    config={'pid':current['pid'],'phase':'player-update','interval_ms':INTERVAL_MS,'radius_metres':RADIUS_METRES,'duration_ms':int(duration*1000),
+    if game['sha256']!=static['profile']['hashes']['game'] or engine['sha256']!=static['profile']['hashes']['engine']:raise ValueError('Exact reviewed module hashes required')
+    config={'profile_id':static['profile_id'],'profile_hashes':dict(static['profile']['hashes']),'game_sha256':game['sha256'],
+      'execution_mode':'trial-181' if trial else 'resident','trial_181':trial,
+      'rvas':dict(static['profile']['rvas']),'pid':current['pid'],'phase':'player-update','interval_ms':INTERVAL_MS,'radius_metres':RADIUS_METRES,'duration_ms':trial['duration_ms'] if trial else int(duration*1000),
       'process_creation_time_100ns':str(identity['creation_time_100ns']),'executable':identity['executable'],'engine_module':engine,
       'module_name':game['name'],'module_path':game['path'],'module_base':game['base'],'module_size':game['size'],
       'game_instance':current['objects']['game']['address'],'player_instance':current['objects']['player']['address'],
@@ -85,25 +115,35 @@ def prepare(session_path=None,duration=0,pid=None,ground_items=False,max_dispatc
     config['values']=[config['player_instance'],config['game_instance'],chain['game_global_slot'],game['base'],chain['level'],chain['client'],chain['player_gate'],engine['base'],'0','0','0',str(int(bool((ground_items or ground_only) and not containers_only))),str(max_dispatches),str(int(not (ground_only or containers_only))),str(int(bool(containers or containers_only))),str(int(bool(dropped_items)))]
     if diagnostic_only:
         for slot in (11,13,14,15):config['values'][slot]='0'
+    if trial:
+        routes={'corpses':['0','1','1','0','0'],'ground':['1','1','0','0','0'],
+                'dropped':['0','1','0','0','1'],'containers':['0','1','0','1','0']}
+        config['values'][11:16]=['0','0','0','0','0'] if diagnostic_only else routes[trial['category']]
+        config['values'][12]=str(trial['dispatch_cap'])
     return config,{'validated_session':current,'query':static,
       'javascript_sha256':hashlib.sha256(Path(__file__).with_suffix('.js').read_bytes()).hexdigest(),
       'lifecycle_contract':'Only successful normal QuickJS17.24 unload permits session detach; no manual CModule disposal'}
 
 
-def dummy():
+def qualification_path(profile):
+    suffix='' if profile['id']==PROFILE_171['id'] else '-'+profile['id']
+    return ROOT/'evidence'/('autoloot-runtime-dummy'+suffix+'.json')
+
+
+def dummy(profile_name='1.7.1'):
+    profile=profile_by_name(profile_name)
     report={'mode':'owned_runtime_fixture_no_game_access','cases':[],'errors':[],'live_executed':False,
-      'core_sha256':hashlib.sha256(Path(__file__).with_suffix('.c').read_bytes()).hexdigest(),
-      'fixture_sha256':hashlib.sha256((ROOT/'tools/autoloot_runtime_fixture.js').read_bytes()).hexdigest()}
+      **qualification_binding(profile)}
     child=subprocess.Popen([sys.executable,'-u','-c','import time; time.sleep(180)'],creationflags=subprocess.CREATE_NO_WINDOW)
     session=None
     try:
         report['stage']='attach';session=bounded(lambda:frida.attach(child.pid))
         session.on('detached',lambda reason,crash:report.update(detached_event={'reason':reason,'crash':str(crash)}))
-        source=(ROOT/'tools/autoloot_runtime_fixture.js').read_text().replace('__OWNED_PID__',str(child.pid)).replace('__CORE_SOURCE__',json.dumps(Path(__file__).with_suffix('.c').read_text()))
+        source=(ROOT/'tools/autoloot_runtime_fixture.js').read_text().replace('__OWNED_PID__',str(child.pid)).replace('__CORE_SOURCE__',json.dumps(core_source(profile))).replace('__FIXTURE_PROFILE__',json.dumps({**profile,'fixture_image_size':fixture_image_size(profile)}))
         script=bounded(lambda:session.create_script(source,runtime='qjs'))
         script.on('message',lambda m,d:report.setdefault('messages',[]).append(m))
         report['stage']='load';bounded(script.load);rpc=script.exports_sync
-        modes=['resource_mode_unreadable','resource_vfunc','resource_valid','resource_multiple','resource_empty','resource_count_limit','resource_count_overflow','resource_mode1','resource_mode_invalid','resource_wrong_state','resource_nested','resource_flag','resource_iloot','resource_callback','resource_wrong_owner','resource_strategy','resource_generation_changed','resource_full','resource_swap','resource_no_progress','resource_post_unreadable','resource_mode_changed','resource_count_changed','resource_near2','resource_far2','resource_range_changed','bag_empty','bag_iloot','bag_post_unreadable','bag_human_changed','bag_valid','bag_mode1','bag_human_control','bag_human_reciprocal','bag_strategy','bag_wrong_owner','bag_wrong_receiver','bag_generation_changed','bag_other_action','bag_full','bag_nested','bag_no_progress','bag_corpse_no_rescue','bag_callback','bag_near2','bag_far2','bag_range_changed','ground_canuse_opportunity_changed','dropped_canuse_opportunity_changed','ground_opportunity','dropped_opportunity','ground_opportunity_changed','dropped_opportunity_changed','ground_ordinary_throwable','dropped_ordinary_throwable','ground_unknown_getter','dropped_unknown_getter','ground_unreadable_desc','dropped_unreadable_desc','diagnostic_mix','diagnostic_only','dropped_valid','dropped_near2','dropped_far2','dropped_swap','dropped_full','dropped_no_progress','dropped_header_changed','dropped_desc_changed','dropped_generation_changed','dropped_post_unreadable','dropped_disabled','dropped_callback','unknown_class','valid','continuous_arrivals','zero_count','near2','far','dirty','wrong_handle','forwarding','extra','mode','nested','null_manager',
+        modes=['ground_alternate_proxy', 'ground_proxy_changed', 'container_alternate_proxy', 'container_proxy_changed', 'dropped_alternate_proxy', 'dropped_proxy_changed', 'bag_alternate_proxy', 'bag_proxy_changed', 'resource_alternate_proxy', 'resource_proxy_changed','bag_wrong_proxy_type','dropped_wrong_proxy_type','ground_wrong_proxy_type','dropped_proxy_slot','resource_mode_unreadable','resource_vfunc','resource_valid','resource_multiple','resource_empty','resource_count_limit','resource_count_overflow','resource_mode1','resource_mode_invalid','resource_wrong_state','resource_nested','resource_flag','resource_iloot','resource_callback','resource_wrong_owner','resource_strategy','resource_generation_changed','resource_full','resource_swap','resource_no_progress','resource_post_unreadable','resource_mode_changed','resource_count_changed','resource_near2','resource_far2','resource_range_changed','bag_empty','bag_iloot','bag_post_unreadable','bag_human_changed','bag_valid','bag_mode1','bag_human_control','bag_human_reciprocal','bag_strategy','bag_wrong_owner','bag_wrong_receiver','bag_generation_changed','bag_other_action','bag_full','bag_nested','bag_no_progress','bag_corpse_no_rescue','bag_callback','bag_near2','bag_far2','bag_range_changed','ground_canuse_opportunity_changed','dropped_canuse_opportunity_changed','ground_opportunity','dropped_opportunity','ground_opportunity_changed','dropped_opportunity_changed','ground_ordinary_throwable','dropped_ordinary_throwable','ground_unknown_getter','dropped_unknown_getter','ground_unreadable_desc','dropped_unreadable_desc','diagnostic_mix','diagnostic_only','dropped_valid','dropped_near2','dropped_far2','dropped_swap','dropped_full','dropped_no_progress','dropped_header_changed','dropped_desc_changed','dropped_generation_changed','dropped_post_unreadable','dropped_disabled','dropped_callback','unknown_class','valid','continuous_arrivals','zero_count','near2','far','dirty','wrong_handle','forwarding','extra','mode','nested','null_manager',
           'wrong_owner','ambiguous','other_action','eligibility_false','no_progress','empty','pagination','concurrency',
           'blocked_query','blocked_dispatch','blocked_dtor','slow_query','context_overflow','respawn','bounded_logs','cooldown_pressure',
           'ground_valid','ground_swap','ground_swap_during_dispatch','ground_forward','ground_forward_448','ground_forward_458',
@@ -179,12 +219,12 @@ def dummy():
                 assert v[38]-int(cadence[-1][4])==(frequency*INTERVAL_MS+999)//1000,(mode,result)
             assert all(b-a>=frequency*INTERVAL_MS/1000 for a,b in zip(qpc,qpc[1:])),(mode,result)
             if mode.startswith('resource_'):
-                if mode in ('resource_valid','resource_multiple','resource_count_limit','resource_near2'):assert v[3]==v[57]==v[58]==1,(mode,result)
+                if mode in ('resource_alternate_proxy','resource_valid','resource_multiple','resource_count_limit','resource_near2'):assert v[3]==v[57]==v[58]==1,(mode,result)
                 elif mode in ('resource_no_progress','resource_post_unreadable'):assert v[3]==v[57]==1 and v[58]==0,(mode,result)
                 elif mode=='resource_mode1':assert v[3]==v[47]==v[48]==1 and v[57]==v[58]==0,(mode,result)
                 else:assert v[3]==v[57]==v[58]==0,(mode,result)
             if mode.startswith('bag_'):
-                if mode in ('bag_valid','bag_near2'):assert v[3]==v[54]==v[55]==1,(mode,result)
+                if mode in ('bag_alternate_proxy','bag_valid','bag_near2'):assert v[3]==v[54]==v[55]==1,(mode,result)
                 elif mode in ('bag_no_progress','bag_post_unreadable'):assert v[3]==v[54]==1 and v[55]==0,(mode,result)
                 else:assert v[3]==v[54]==v[55]==0,(mode,result)
             if mode in ('ground_opportunity','dropped_opportunity'):
@@ -196,9 +236,18 @@ def dummy():
             if mode in ('diagnostic_only','diagnostic_mix'):
                 assert v[1]>0 and v[62]>0 and v[3]==0 and all(stats[i]==0 for i in (0,2,4,6,8)),(mode,result)
             if mode.startswith('dropped_'):
-                if mode in ('dropped_valid','dropped_near2','dropped_ordinary_throwable'):assert v[3]==v[51]==v[52]==1,(mode,result)
+                if mode in ('dropped_alternate_proxy','dropped_valid','dropped_near2','dropped_ordinary_throwable'):assert v[3]==v[51]==v[52]==1,(mode,result)
                 elif mode in ('dropped_no_progress','dropped_post_unreadable'):assert v[3]==v[51]==1 and v[52]==0,(mode,result)
                 else:assert v[3]==v[51]==v[52]==0,(mode,result)
+            if mode in ('dropped_wrong_proxy_type','ground_wrong_proxy_type','bag_wrong_proxy_type'):
+                assert v[3]==0 and all(stats[i]==0 for i in (0,2,4,6,8)),(mode,result)
+                assert any(int(row[2])==43 and int(row[5])==1 for row in result['candidates'] if int(row[1])!=0),(mode,result)
+            if mode=='dropped_proxy_slot':
+                assert v[3]==0 and all(stats[i]==0 for i in (0,2,4,6,8)),(mode,result)
+                assert any(int(event[6])==40 for event in result['events']),(mode,result)
+            if mode.endswith('_proxy_changed'):
+                assert v[3]==0 and stats[6]>0 and stats[8]==0,(mode,result)
+                assert any(int(event[6])==40 for event in result['events']),(mode,result)
             if mode=='unknown_class':
                 assert v[3]==0 and v[62]>1 and v[63]==1 and int(result['candidates'][0][1])!=0 and int(result['candidates'][0][5])==0,(mode,result)
             if mode=='wrong_owner':
@@ -241,14 +290,14 @@ def dummy():
                 if mode in ('ground_continuous','ground_receiver_generation'):
                     assert v[41]==0 and v[43]>=8 and v[44]==v[43] and v[42]==0,(mode,result)
                 elif mode=='ground_no_progress':assert v[41]==0 and v[43]==2 and v[44]==0 and v[0]>=4,(mode,result)
-                elif mode in ('ground_valid','ground_blocked_dispatch','ground_near2','ground_ordinary_throwable'):
+                elif mode in ('ground_alternate_proxy','ground_valid','ground_blocked_dispatch','ground_near2','ground_ordinary_throwable'):
                     assert v[3]==1 and v[43]==1 and v[44]==1 and v[42]==1 and stats[15]==1,(mode,result)
                 elif mode=='ground_swap_during_dispatch':
                     assert v[3]==1 and v[42]==1 and v[44]==0 and stats[15]==0,(mode,result)
                 else:assert v[3]==0 and stats[15]==0,(mode,result)
             if mode.startswith('container_'):
                 assert v[4]==v[43]==v[44]==0 and v[40]==0,(mode,result)
-                if mode in ('container_valid','container_blocked_dispatch','container_near2'):
+                if mode in ('container_alternate_proxy','container_valid','container_blocked_dispatch','container_near2'):
                     assert v[3]==v[47]==v[48]==1 and v[42]==1 and stats[15]==1,(mode,result)
                 elif mode=='container_no_progress':assert v[47]==2 and v[48]==0 and v[0]>=4,(mode,result)
                 else:assert v[3]==v[47]==v[48]==stats[15]==0,(mode,result)
@@ -269,7 +318,7 @@ def dummy():
             try:bounded(session.detach)
             except Exception as error:report['detach_note']=str(error)
         report['owned_child_exited']=child.poll() is not None
-        output=ROOT/'evidence/autoloot-runtime-dummy.json';output.parent.mkdir(parents=True,exist_ok=True);output.write_text(json.dumps(report,indent=2)+'\n')
+        output=qualification_path(profile);output.parent.mkdir(parents=True,exist_ok=True);output.write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps({'passed':report['passed'],'cases':len(report['cases']),'errors':report['errors'],'output':str(output)}))
     return 0 if report['passed'] else 1
 
@@ -291,6 +340,9 @@ def _live(args):
               'Spatial pagination observes a changing vector; coverage is not atomic.',
               'No-progress slots are retained60s; full64-slot pressure refuses new dispatches.',
               'Post count0/state5 does not establish inventory credit or cooperative ownership.']}
+    if getattr(args,'trial_181',False):
+        report['mode']='bounded_trial_181'
+        report['limitations'].append('Essai expérimental 1.8.1 : diagnostic seul ou nombre explicite d’appels de collecte limité à 64 dans une catégorie; aucun crédit d’inventaire établi par ces compteurs. Une catégorie ne qualifie pas les autres. Conteneurs, sacs et ressources restent des scénarios distincts. La durée limite ne préempte pas un appel natif déjà commencé.')
     lock=threading.Lock();io_lock=threading.Lock();armed=threading.Event();stopped=threading.Event();detached=threading.Event()
     session=script=None;load_requested=False;config=None
     status_path=getattr(args,'status',ROOT/'evidence/autoloot5m/status.json');stop_path=getattr(args,'stop_file',ROOT/'evidence/autoloot5m/stop.request')
@@ -379,9 +431,10 @@ def _live(args):
         api=discovery.api_setup();pids=discovery.process_ids(api)
         if not pids or (getattr(args,'pid',None) is not None and args.pid not in pids):
             report['game_closed']=True;status('game_closed',False,False,'The game is closed');raise _StopRequested()
-        config,proof=prepare(getattr(args,'session',None),args.duration,getattr(args,'pid',None),getattr(args,'ground_items',False),getattr(args,'max_dispatches',0),getattr(args,'ground_only',False),getattr(args,'containers',False),getattr(args,'containers_only',False),getattr(args,'dropped_items',False),getattr(args,'diagnostic_only',False));report['preflight']=proof
+        config,proof=prepare(getattr(args,'session',None),args.duration,getattr(args,'pid',None),getattr(args,'ground_items',False),getattr(args,'max_dispatches',0),getattr(args,'ground_only',False),getattr(args,'containers',False),getattr(args,'containers_only',False),getattr(args,'dropped_items',False),getattr(args,'diagnostic_only',False),getattr(args,'trial_181',False),getattr(args,'trial_category',None));report['preflight']=proof
+        if config.get('trial_181'):report['trial']=config['trial_181']
         if stop_requested():report['stop_before_setup']=True;raise _StopRequested()
-        raw=Path(__file__).with_suffix('.c').read_bytes()
+        raw=core_source(proof['query']['profile']).encode('utf-8')
         if hashlib.sha256(raw).hexdigest()!=proof['query']['core_sha256']:raise ValueError('Core changed after preflight')
         source=Path(__file__).with_suffix('.js').read_text()
         if source.count('__QUERY_CONFIG__')!=1 or source.count('__QUERY_CORE__')!=1:raise ValueError('Source marker mismatch')
@@ -492,6 +545,9 @@ def main():
     modes.add_argument('--preflight-only',action='store_true')
     modes.add_argument('--static-only',action='store_true')
     modes.add_argument('--live',action='store_true')
+    parser.add_argument('--profile',default='1.7.1',help='Profil de la fixture hors jeu; ne permet aucune activation expérimentale')
+    parser.add_argument('--trial-181',action='store_true',help='Essai 1.8.1 borné à 30 s et à un cap explicite de 1 à 64 appels; cap0 en diagnostic')
+    parser.add_argument('--trial-category',choices=('corpses','ground','dropped','containers'),default=None,help='Catégorie unique de l’essai; corpses par défaut, seule catégorie du diagnostic')
     parser.add_argument('--session',type=Path)
     parser.add_argument('--duration',type=float,default=0)
     parser.add_argument('--pid',type=int)
@@ -508,12 +564,14 @@ def main():
     parser.add_argument('--pause-file',type=Path,default=None,help='Optional persistent manual pause; never cleared by this host')
     parser.add_argument('--output',type=Path,default=ROOT/'evidence/autoloot5m/runtime-report.json')
     args=parser.parse_args()
-    if args.dummy:return dummy()
+    if args.trial_category is not None and not args.trial_181:parser.error('--trial-category requires --trial-181')
+    if args.trial_181 and (args.dummy or args.static_only):parser.error('--trial-181 requires --live or --preflight-only')
+    if args.dummy:return dummy(args.profile)
     if args.static_only:
         print(json.dumps({'static_only':True,'process_opened':False,'proof':static_proof()}));return 0
     if not 0<=args.duration<=86400:parser.error('duration must be0..86400s')
     if args.preflight_only:
-        config,proof=prepare(args.session,args.duration,args.pid,args.ground_items,args.max_dispatches,args.ground_only,args.containers,args.containers_only,args.dropped_items,args.diagnostic_only)
+        config,proof=prepare(args.session,args.duration,args.pid,args.ground_items,args.max_dispatches,args.ground_only,args.containers,args.containers_only,args.dropped_items,args.diagnostic_only,args.trial_181,args.trial_category)
         print(json.dumps({'preflight_ok':True,'frida_attached':False,'output_written':False,'config':config,
                           'core_sha256':proof['query']['core_sha256']}));return 0
     return live(args)

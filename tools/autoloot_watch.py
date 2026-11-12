@@ -309,6 +309,8 @@ class Watcher:
         if paused or shutting_down:
             self.request_stop()
             return self.status('paused' if paused else 'stopping')
+        if proof.get('runtime_live_allowed') is False:
+            return self.status('experimental_disabled', 'Experimental profile: automatic activation is disabled.')
         if proof.get('ready') is not True:
             return self.status(proof.get('phase', 'waiting_session'), proof.get('reason', ''))
         pid = proof.get('pid')

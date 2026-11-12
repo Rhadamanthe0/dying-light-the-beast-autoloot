@@ -98,6 +98,13 @@ class WatchTests(unittest.TestCase):
         self.assertEqual(state['host_pid'], watch.os.getpid())
         self.assertEqual(state['launch_token'], 'watcher-test')
 
+    def test_experimental_discovery_never_starts_a_worker(self):
+        self.backend.proof['runtime_live_allowed'] = False
+        state = self.watcher.step()
+        self.assertEqual(state['state'], 'experimental_disabled')
+        self.assertFalse(self.backend.spawns)
+        self.assertIsNone(self.watcher.worker)
+
     def test_menu_waits_until_ready(self):
         self.backend.proof = {'ready': False, 'phase': 'waiting_session'}
         self.assertEqual(self.watcher.step()['state'], 'waiting_session')

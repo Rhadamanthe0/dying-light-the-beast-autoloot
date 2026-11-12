@@ -177,8 +177,31 @@ function Configure-AutoLoot([string]$InstallationRoot, [string]$InstallerStatePa
     if ($state.version -ne 1 -or $state.root -ne [IO.Path]::GetFullPath($InstallationRoot) -or
         $state.no_auto_start -ne [bool]$SkipAutoStart) { throw 'Installer preparation state does not match this installation.' }
     $python = Get-AutoLootPython $InstallationRoot
-    & $python (Join-Path $InstallationRoot 'tools\autoloot_runtime.py') --dummy
-    if ($LASTEXITCODE -ne 0) { throw 'Offline checks failed. See the installation log.' }
+    foreach ($profile in @('1.7.1.0na', '1.8.1.0na')) {
+        & $python (Join-Path $InstallationRoot 'tools\autoloot_runtime.py') --dummy --profile $profile
+        if ($LASTEXITCODE -ne 0) { throw ('Offline checks failed for ' + $profile + '. See the installation log.') }
+    }
+    # Les deux preuves locales doivent correspondre aux sources installées.
+    # Une qualification hors jeu ne remplace pas les gardes actives en partie.
+    $qualificationCheck = @'
+import json,sys
+sys.path.insert(0,sys.argv[1])
+import autoloot_runtime as runtime
+for name in ('1.7.1.0na','1.8.1.0na'):
+    profile=runtime.profile_by_name(name)
+    proof=json.loads(runtime.qualification_path(profile).read_text(encoding='utf-8'))
+    binding=runtime.qualification_binding(profile)
+    cases=proof.get('cases')
+    if (proof.get('passed') is not True or proof.get('mode')!='owned_runtime_fixture_no_game_access'
+        or proof.get('live_executed') is not False or proof.get('errors')!=[]
+        or not isinstance(cases,list) or len(cases)!=158
+        or any(not isinstance(case,dict) or case.get('passed') is not True for case in cases)
+        or proof.get('host_tests',{}).get('passed') is not True
+        or any(proof.get(key)!=value for key,value in binding.items())):
+        raise ValueError('Qualification evidence differs from installed sources: '+name)
+'@
+    & $python -B -c $qualificationCheck (Join-Path $InstallationRoot 'tools')
+    if ($LASTEXITCODE -ne 0) { throw 'Offline checks failed: missing or stale qualification evidence. See the installation log.' }
     if ($SkipAutoStart) {
         Write-Host 'Offline checks passed. Automatic startup is disabled; AutoLoot remains paused.'
         return

@@ -7,10 +7,12 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autoloot_runtime as runtime
 
 
@@ -71,13 +73,13 @@ class HostTests(unittest.TestCase):
             test.replace_attempts+=1
             if test.replace_attempts<=replace_failures:raise PermissionError('simulated Windows reader')
             return original_replace(source,destination)
-        core=hashlib.sha256(Path(runtime.__file__).with_suffix('.c').read_bytes()).hexdigest()
+        core=hashlib.sha256(runtime.core_source().encode('utf-8')).hexdigest()
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(runtime,'SingleInstance',return_value=contextlib.nullcontext()))
             stack.enter_context(patch.object(runtime,'clear_stale_stop',return_value=fresh_stop))
             api=stack.enter_context(patch.object(runtime.discovery,'api_setup',return_value=object()))
             stack.enter_context(patch.object(runtime.discovery,'process_ids',return_value=[12345] if pids is None else pids))
-            prepare=stack.enter_context(patch.object(runtime,'prepare',return_value=({'pid':12345},{'query':{'core_sha256':core}})))
+            prepare=stack.enter_context(patch.object(runtime,'prepare',return_value=({'pid':12345},{'query':{'core_sha256':core,'profile':runtime.PROFILE_171}})))
             actual_attach=stack.enter_context(patch.object(runtime.frida,'attach',side_effect=attach))
             stack.enter_context(patch.object(runtime.os,'replace',side_effect=replace))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
