@@ -78,12 +78,22 @@ jobs:
           $path = Join-Path 'dist' $name
           $hash = (Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant()
           ($hash + '  ' + $name) | Set-Content -LiteralPath ($path + '.sha256') -Encoding ascii
+      - name: Sign automatic update manifest
+        shell: pwsh
+        env:
+          AUTOLOOT_UPDATE_SIGNING_KEY: ${{ secrets.AUTOLOOT_UPDATE_SIGNING_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          .\.venv\Scripts\python.exe tools/sign_update.py --installer ("dist/BetterAutoLoot-Setup-" + $env:VERSION + ".exe") --version $env:VERSION --output dist
+          if ($LASTEXITCODE -ne 0) { throw 'Update manifest signature failed' }
       - uses: actions/upload-artifact@v4
         with:
           name: installer
           path: |
             dist/*.exe
             dist/*.exe.sha256
+            dist/update-manifest.json
+            dist/update-manifest.sig
           if-no-files-found: error
           retention-days: 14
       - name: Keep build diagnostics
@@ -130,12 +140,17 @@ jobs:
               raise RuntimeError('Tag changed after the build; refusing publication')
           name = 'BetterAutoLoot-Setup-' + os.environ['VERSION'] + '.exe'
           folder = pathlib.Path('dist')
-          if sorted(p.name for p in folder.iterdir()) != sorted([name, name + '.sha256']):
+          if sorted(p.name for p in folder.iterdir()) != sorted([name, name + '.sha256', 'update-manifest.json', 'update-manifest.sig']):
               raise RuntimeError('Unexpected release files')
           expected, checksum_name = (folder / (name + '.sha256')).read_text().strip().split()
           actual = hashlib.sha256((folder / name).read_bytes()).hexdigest()
           if checksum_name != name or actual != expected:
               raise RuntimeError('Installer checksum mismatch')
+          manifest = json.loads((folder / 'update-manifest.json').read_bytes())
+          expected_manifest = {'schema': 1, 'repository': repo, 'version': os.environ['VERSION'],
+                               'filename': name, 'size': (folder / name).stat().st_size, 'sha256': actual}
+          if manifest != expected_manifest:
+              raise RuntimeError('Signed manifest differs from installer')
           PY
       - name: Attach GitHub-built installer to release
         shell: bash
@@ -143,5 +158,5 @@ jobs:
           if ! gh release view "$RELEASE_TAG" --repo "$GH_REPO" > /dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --repo "$GH_REPO" --verify-tag --title "Better AutoLoot $VERSION" --generate-notes
           fi
-          gh release upload "$RELEASE_TAG" "dist/BetterAutoLoot-Setup-$VERSION.exe" "dist/BetterAutoLoot-Setup-$VERSION.exe.sha256" --repo "$GH_REPO" --clobber
+          gh release upload "$RELEASE_TAG" "dist/BetterAutoLoot-Setup-$VERSION.exe" "dist/BetterAutoLoot-Setup-$VERSION.exe.sha256" "dist/update-manifest.json" "dist/update-manifest.sig" --repo "$GH_REPO" --clobber
           echo "Installer built from $SOURCE_SHA and published to $GITHUB_SERVER_URL/$GH_REPO/releases/tag/$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"

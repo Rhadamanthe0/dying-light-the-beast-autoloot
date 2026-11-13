@@ -353,6 +353,8 @@ def live(args):
                 raise OSError('Initial watcher status could not be published; no backend started')
             backend = WindowsBackend(args)
             watcher = Watcher(args, backend)
+            from autoloot_update import UpdateScheduler
+            updates = UpdateScheduler(ROOT)
             while True:
                 started = time.monotonic()
                 try:
@@ -375,6 +377,10 @@ def live(args):
                     result = watcher.status('error', watcher.last_error)
                 if result['phase'] == 'stopped':
                     return 0
+                try:
+                    updates.tick()
+                except Exception as error:
+                    append_log(args.log, 'Update check: ' + str(error))
                 # Start-to-start polling, no replay of missed intervals.
                 try:
                     time.sleep(max(0, started + args.poll_seconds - time.monotonic()))
