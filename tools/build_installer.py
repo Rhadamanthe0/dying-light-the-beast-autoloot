@@ -19,9 +19,9 @@ import zipfile
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from runtime_profile import PROFILE_171, PROFILE_181, profile_digest, compiled_core
+from mod_version import VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '1.3.0'
 NATIVE_CASE_COUNT = 158
 PYTHON_VERSION = '3.14.7'
 PYTHON_EMBED_URL = 'https://www.python.org/ftp/python/3.14.7/python-3.14.7-embed-amd64.zip'
@@ -30,6 +30,7 @@ PACKAGES = {'frida': '17.24.0', 'pefile': '2024.8.26', 'capstone': '5.0.9'}
 TOOLS = ('autoloot_runtime.py', 'autoloot_runtime.js', 'autoloot_runtime.c',
          'autoloot_runtime_fixture.py', 'autoloot_runtime_fixture.js', 'autoloot_watch.py',
          'runtime_paths.py', 'runtime_profile.py', 'discovery_181.py', 'runtime_control.py', 'game_paths.py', 'discover_session.py',
+         'autoloot_update.py', 'update_trust.py', 'mod_version.py',
          'inspect_native.py', 'observe_runtime.py', 'manage.ps1', 'control.py', 'DIAGNOSTIC.md')
 FILES = ('README.md', 'requirements.txt', 'autoloot.local.example.json')
 
@@ -158,7 +159,7 @@ PROBE = r'''
 import json,sys
 from pathlib import Path
 try:
- import unittest.mock,frida,capstone,pefile,ordlookup,runtime_paths,runtime_profile
+ import unittest.mock,frida,capstone,pefile,ordlookup,runtime_paths,runtime_profile,autoloot_update,update_trust,mod_version
  from importlib.metadata import version
  root=Path(sys.executable).resolve().parent
  bundle=root.parent
@@ -167,6 +168,8 @@ try:
  assert not any(".venv" in Path(entry).parts for entry in sys.path),sys.path
  assert Path(runtime_paths.__file__).resolve().is_relative_to(bundle),runtime_paths.__file__
  assert Path(runtime_profile.__file__).resolve().is_relative_to(bundle),runtime_profile.__file__
+ for module in (autoloot_update,update_trust,mod_version):
+  assert Path(module.__file__).resolve().is_relative_to(bundle),module.__file__
  assert sys.version_info[:3]==(3,14,7),sys.version
  assert frida.__version__=='17.24.0'
  assert version('capstone')=='5.0.9',version('capstone')

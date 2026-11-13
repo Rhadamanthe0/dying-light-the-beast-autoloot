@@ -6,7 +6,7 @@
   #define OutputDir "..\dist"
 #endif
 #ifndef AppVersion
-  #define AppVersion "1.2.0"
+  #error AppVersion must be provided by tools/build_installer.py
 #endif
 #ifdef Audit
   #define AppIdentity "BetterAutoLoot-Isolated-Audit"

@@ -15,9 +15,19 @@ ROOT=Path(__file__).resolve().parents[1]
 RUNTIME_FILES=('autoloot_runtime.py','autoloot_runtime.c','autoloot_runtime.js',
                'autoloot_runtime_fixture.js','autoloot_runtime_fixture.py','discover_session.py','inspect_native.py',
                'observe_runtime.py','game_paths.py','runtime_control.py','autoloot_watch.py',
-               'runtime_paths.py','runtime_profile.py','discovery_181.py','control.py')
+               'runtime_paths.py','runtime_profile.py','discovery_181.py','control.py',
+               'autoloot_update.py','update_trust.py','mod_version.py')
 
 class PackageTests(unittest.TestCase):
+    def test_installer_requires_the_builder_version(self):
+        installer=(ROOT/'installer/autoloot.iss').read_text(encoding='utf-8')
+        required=re.search(r'#ifndef AppVersion\s+([^\n]+)',installer)
+        self.assertIsNotNone(required)
+        self.assertTrue(required[1].strip().startswith('#error '))
+        builder=(ROOT/'tools/build_installer.py').read_text(encoding='utf-8')
+        self.assertIn("'/DAppVersion=' + VERSION",builder)
+        self.assertIn('from mod_version import VERSION',builder)
+
     def test_release_runpy_import_resolves_adjacent_profile(self):
         command="import runpy; print(runpy.run_path('tools/build_installer.py')['VERSION'])"
         result=subprocess.run([sys.executable,'-c',command],cwd=ROOT,capture_output=True,text=True,timeout=20)

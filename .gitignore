@@ -28,6 +28,10 @@
 !/tools/discovery_181.py
 !/tools/control.py
 !/tools/build_installer.py
+!/tools/mod_version.py
+!/tools/autoloot_update.py
+!/tools/update_trust.py
+!/tools/sign_update.py
 !/installer/
 /installer/*
 !/installer/autoloot.iss
@@ -37,6 +41,8 @@
 !/tests/test_discovery_paths.py
 !/tests/test_discovery_memory.py
 !/tests/test_package.py
+!/tests/test_update.py
+!/tests/test_update_trust.py
 !/tests/test_runtime_control.py
 !/tests/test_runtime_host.py
 !/tests/test_stop_script.py

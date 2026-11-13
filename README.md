@@ -1,6 +1,6 @@
 # Better AutoLoot: Dying Light: The Beast
 
-Source version **1.3.0**. Automatically loot eligible corpses, ground items, inventory weapons, leftover loot bags and supported plant/container mechanisms within **2 metres**, with a **100 ms target interval**. No aiming or interaction key required.
+Source version **1.4.0**. Automatically loot eligible corpses, ground items, inventory weapons, leftover loot bags and supported plant/container mechanisms within **2 metres**, with a **100 ms target interval**. No aiming or interaction key required.
 
 Runs invisibly in the background, checks for the game every **10 seconds**, and stops looting when the game closes.
 
@@ -13,6 +13,12 @@ Runs invisibly in the background, checks for the game every **10 seconds**, and 
 **No Python installation or Internet connection is needed during setup.** Everything is included. The download can be deleted afterward.
 
 Installs for your Windows account in `%LOCALAPPDATA%\Programs\Better AutoLoot` by default. You can choose another empty, dedicated folder; keep it outside the game folder. The watcher starts automatically after installation and at Windows sign-in. Updates preserve an existing pause.
+
+## Automatic updates
+
+At Windows sign-in, the watcher checks GitHub for a newer stable release, then checks again every 24 hours while it runs. Internet access is needed for these checks and downloads. Offline failures are retried without interrupting collection.
+
+An update is installed silently after the game closes. The downloaded installer must match a release manifest signed by the mod's pinned update key. Updates preserve a manual pause and the installation folder. Unsupported game updates still require a qualified compatibility profile.
 
 ## Pause or uninstall
 
@@ -55,9 +61,9 @@ python tools/build_installer.py --stage-only
 python tools/build_installer.py --iscc "C:\path\to\ISCC.exe"
 ```
 
-Both commands stage a fresh embedded runtime and run the native fixture separately for both game profiles. `--stage-only` stops before installer compilation. Neither command installs or starts AutoLoot. Build reports are saved under `.build/reports`; the full build produces `dist/BetterAutoLoot-Setup-1.3.0.exe`.
+Both commands stage a fresh embedded runtime and run the native fixture separately for both game profiles. `--stage-only` stops before installer compilation. Neither command installs or starts AutoLoot. Build reports are saved under `.build/reports`; the full build produces `dist/BetterAutoLoot-Setup-1.4.0.exe`.
 
-Update `VERSION` in `tools/build_installer.py`, commit, and push the matching `vMAJOR.MINOR.PATCH` tag. GitHub builds, tests and publishes the installer automatically. **Actions → Build and publish installer → Run workflow** rebuilds an existing tag.
+The release workflow requires the repository secret `AUTOLOOT_UPDATE_SIGNING_KEY` to sign the update manifest. Keep that private key outside the source tree. Update `VERSION` in `tools/mod_version.py`, commit, and push the matching `vMAJOR.MINOR.PATCH` tag. GitHub builds, tests and publishes the installer automatically. **Actions → Build and publish installer → Run workflow** rebuilds an existing tag.
 
 All workflows run on GitHub-hosted runners (`windows-latest` for the Windows jobs, `ubuntu-latest` for publication).
 </details>
