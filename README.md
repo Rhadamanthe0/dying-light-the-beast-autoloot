@@ -33,9 +33,11 @@ Installs for your Windows account in `%LOCALAPPDATA%\Programs\Better AutoLoot` b
 | Steam executable | Steam build | In-game evidence |
 | --- | --- | --- |
 | **1.7.1.0na** | **25361591** | Earlier checks confirmed lavender, chamomile, a common C515 carbine, a military axe and leftover loot bags. An opportunity pitchfork remained untouched. |
-| **1.8.1.0na** | **26402545** | Corpses were collected without aiming or pressing an interaction key, including on approach at a measured **1.92255 m**. Retrieving **Poinçonneuse** increased weapon inventory from **7 to 8 of 16** slots. Runtime counters recorded **three emptied loot bags**; the user confirmed pickup. |
+| **1.8.1.0na** | **26402545** | Corpses were collected without aiming or pressing an interaction key, including on approach at a measured **1.92255 m**. Retrieving **Poinçonneuse** increased weapon inventory from **7 to 8 of 16** slots. Runtime counters recorded **three emptied loot bags**; the user confirmed pickup and also confirmed automatic collection of ground objects. |
 
-Other ground-item, plant and container mechanisms on 1.8.1 rely on the existing guarded paths and local tests; they have not been separately verified in game on that version. Full-inventory, weapon-swap and opportunity-weapon refusals are retained and covered by local tests. A full-inventory trial was not repeated in game on 1.8.1. Legendary weapons have not been individually verified on either version.
+Individual ground-item types and other plant and container mechanisms on 1.8.1 rely on the existing guarded paths and local tests; they have not been separately verified in game on that version. Full-inventory, weapon-swap and opportunity-weapon refusals are retained and covered by local tests. A full-inventory trial was not repeated in game on 1.8.1. Legendary weapons have not been individually verified on either version.
+
+For the next game update, follow the [profile qualification procedure](tools/DIAGNOSTIC.md#qualifying-a-new-game-build).
 
 ## Troubleshooting
 

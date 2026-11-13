@@ -55,3 +55,11 @@ After normal shutdown is confirmed, resume the installed AutoLoot from its Start
 - Ready-to-take plants use the guarded Container mode-2 resource mechanism, without plant-name or rarity lists. These events are `resource_container`, with separate dispatch, refusal and completion counters. They require 1 to 512 initial contents, state 1, no nested container and the exact owner, generation and callbacks. Ordinary containers retain mode 1. Unknown modes are refused with reason `47`; read/budget failures retain reasons `100`, `101` or `102`. No opening action substitutes for Take1.
 
 `dropped_source_changed` records a successfully read receiver-generation or target change after dispatch. Count-zero/state-five counters describe source progress. Neither source disappearance nor these counters alone establish inventory credit. Failed reads remain unknown or no progress. Multiple-item corpse/container payloads have not been individually qualified for opportunity-weapon exclusion.
+
+## Qualifying a new game build
+
+1. Record the executable version, Steam build ID and SHA-256 of both the game and engine DLLs. An unknown pair leaves the collector inactive.
+2. Start from the latest profile in `runtime_profile.py` and the checks in `discovery_181.py`. Resolve each address separately. Check function boundaries, class tables, slots and call sites. Reject missing or ambiguous matches.
+3. Verify the local player, object ownership, lifetime, callbacks and inventory eligibility on the new build. Observe a normal pickup to confirm the call path. Keep the checks for the previous builds.
+4. Register the candidate for offline tests. Run the native fixture for the candidate and the supported profiles. Include the new profile in installer qualification and CI.
+5. Verify a bounded pickup on the new build before enabling normal startup for its exact DLL pair. Record the distance, the source change and the observed inventory gain. Update the compatibility table with the categories actually observed.
