@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 from inspect_native import Image
 from game_paths import locate_game
 import observe_runtime as observer
+from runtime_profile import PROFILE_181
 
 BIN = locate_game() / "ph_ft/work/bin/x64"
 EXE = "DyingLightGame_TheBeast_x64_rwdi.exe"
@@ -86,8 +87,15 @@ def prepare_static():
     bin_path = locate_game() / "ph_ft/work/bin/x64"
     BIN = bin_path
     image = Image(bin_path / GAME_DLL)
-    if hashlib.sha256(image.data).hexdigest() != HASHES["game"] or digest(bin_path / ENGINE_DLL) != HASHES["engine"]:
-        raise ValueError("Installed DLL hash differs from reviewed 1.7.1 build")
+    game_hash=hashlib.sha256(image.data).hexdigest()
+    if game_hash not in (HASHES["game"],PROFILE_181["hashes"]["game"]):
+        raise ValueError("Installed DLL hash differs from reviewed builds")
+    hashes={"game":game_hash,"engine":digest(bin_path / ENGINE_DLL)}
+    if hashes==PROFILE_181['hashes']:
+        from discovery_181 import prepare_static_181
+        return prepare_static_181(image,bin_path,hashes)
+    if hashes!=HASHES:
+        raise ValueError("Installed DLL hash differs from reviewed builds")
     if image.pe.FILE_HEADER.Machine != 0x8664 or image.pe.OPTIONAL_HEADER.Magic != 0x20B:
         raise ValueError("Reviewed x64 PE required")
     guards = []
@@ -141,6 +149,7 @@ def prepare_static():
     if parent[0]!=0x12CC7A0:
         raise ValueError('Controller caller unwind parent changed')
     return {"schema_version": 1, "mode": "static_PE_only_no_process_access",
+            "profile_id":"1.7.1.0na","runtime_live_allowed":True,
             "images": {key:{"path":str(bin_path/name),"sha256":HASHES[key]} for key,name in [("game",GAME_DLL),("engine",ENGINE_DLL)]},
             "game_global_rva": hex(global_rva), "guarded_prologues": guards,
             "discovery_prologues": discovery_guards, "vtables": tables,
@@ -307,9 +316,11 @@ def discover(pid=None):
         if len(matches)!=1 or path_key(matches[0]['path'])!=path_key(bin_path/name):
             raise ValueError("Expected module/path not unique: "+name)
         module=dict(matches[0]); module['sha256']=digest(module['path'])
-        if key in HASHES and module['sha256']!=HASHES[key]:
+        if key in ('game','engine') and module['sha256']!=proof['images'][key]['sha256']:
             raise ValueError("Loaded module disk hash mismatch: "+name)
         modules[key]=module
+    vtable_rvas={key:proof['vtables'][key]['rva'] for key in ('game','player','trigger')}
+    owner_getter_rva=int(proof['chain']['trigger_owner_getter_rva'],0)
     base=int(modules['game']['base'],0)
     handle=api.OpenProcess(observer.PROCESS_ACCESS,False,pid)
     if not handle:
@@ -332,12 +343,12 @@ def discover(pid=None):
             name=table['rtti_name'].encode()+b'\0'
             if rd.read(base+table['type_descriptor_rva']+16,len(name))!=name:
                 raise ValueError("Live RTTI name mismatch: "+table['class'])
-        if rd.q(base+VTABLE_RVAS['trigger']+0x4A8)!=base+0x17F800:
+        if rd.q(base+vtable_rvas['trigger']+0x4A8)!=base+owner_getter_rva:
             raise ValueError("Live Trigger owner getter slot mismatch")
         global_address=base+int(proof['game_global_rva'],0)
         def get_chain():
             game=rd.q(global_address)
-            if rd.q(game)!=base+VTABLE_RVAS['game']:
+            if rd.q(game)!=base+vtable_rvas['game']:
                 raise ValueError("Game not ready or wrong exact vtable")
             level=rd.q(game+0x138)
             client=rd.q(level+0xEC8)
@@ -345,7 +356,7 @@ def discover(pid=None):
             if not gate:
                 raise ValueError("Player not ready: client gate is null")
             player=rd.q(client+0x90)
-            if rd.q(player)!=base+VTABLE_RVAS['player']:
+            if rd.q(player)!=base+vtable_rvas['player']:
                 raise ValueError("Player not ready or wrong exact vtable")
             return game,level,client,gate,player
         game,level,client,gate,player=get_chain()
@@ -359,7 +370,7 @@ def discover(pid=None):
                 rd.unreadable_candidates+=1
                 continue
             value=rd.q(pointer)
-            if value==base+VTABLE_RVAS['trigger']:
+            if value==base+vtable_rvas['trigger']:
                 owner=rd.q(pointer+8)
                 class_candidates.append({'address':hex(pointer),'owner':hex(owner),'player_field_offsets':[hex(o) for o in offsets]})
                 if owner==player:
@@ -386,7 +397,7 @@ def discover(pid=None):
             if not pointer:
                 continue
             value=rd.q(pointer)
-            if value==base+VTABLE_RVAS['trigger']:
+            if value==base+vtable_rvas['trigger']:
                 owner=rd.q(pointer+8)
                 if owner==player:
                     matches.setdefault(pointer,[])
@@ -397,7 +408,7 @@ def discover(pid=None):
         trigger,offsets=next(iter(matches.items()))
         if get_chain()!=(game,level,client,gate,player):
             raise ValueError("Game/player chain changed during bounded read")
-        if rd.q(trigger)!=base+VTABLE_RVAS['trigger'] or rd.q(trigger+8)!=player:
+        if rd.q(trigger)!=base+vtable_rvas['trigger'] or rd.q(trigger+8)!=player:
             raise ValueError("Trigger identity changed during discovery")
         if any(rd.q(player+offset)!=trigger for offset in offsets):
             raise ValueError("Player/controller field changed during discovery")
@@ -419,11 +430,12 @@ def discover(pid=None):
     for module in modules.values():
         if not any(m=={k:module[k] for k in ['name','path','base','size']} for m in end_modules):
             raise ValueError("Loaded module identity changed during discovery")
-    result={"schema_version":1,"ready":True,"mode":"read_only_no_native_calls_no_injection",
+    result={"schema_version":1,"ready":True,"profile_id":proof["profile_id"],
+            "runtime_live_allowed":proof["runtime_live_allowed"],"mode":"read_only_no_native_calls_no_injection",
             "pid":pid,"observed_at_utc":datetime.now(timezone.utc).isoformat(),
             "process_identity":{"creation_time_100ns":created,"executable":modules.pop('exe')},
             "modules":modules,"static_proof_sha256":canonical_hash(proof),
-            "objects":{key:{"address":hex(address),"vtable":hex(base+VTABLE_RVAS[key])}
+            "objects":{key:{"address":hex(address),"vtable":hex(base+vtable_rvas[key])}
                        for key,address in [('game',game),('player',player),('trigger',trigger)]},
             "chain":{"game_global_slot":hex(global_address),"game_global_rva":proof['game_global_rva'],
                      "level":hex(level),"client":hex(client),"player_gate":hex(gate),**proof['chain']},
@@ -434,7 +446,7 @@ def discover(pid=None):
                       "player_prefix_bytes":PLAYER_PREFIX_BYTES,"heap_scan":False},
             "limitations":proof['limits']}
     result['objects']['trigger'].update(owner_player=hex(player),player_field_offsets=[hex(offset) for offset in offsets],
-                                        owner_slot_offset='0x4a8',owner_pointer_offset='0x8',owner_getter_rva='0x17f800',
+                                        owner_slot_offset='0x4a8',owner_pointer_offset='0x8',owner_getter_rva=hex(owner_getter_rva),
                                         native_vector_indices=vector_indices.get(trigger,[]))
     result['chain'].update(controller_host=hex(host),controller_registry=hex(registry),controller_list_data=hex(data),
                            controller_list_packed=hex(packed),controller_count=count,controller_marker=marker,
@@ -458,7 +470,7 @@ def validate_session(path,max_age_seconds=120):
     if not 0<=age<=max_age_seconds:
         raise ValueError("Session file stale or timestamp in the future")
     current=discover(stored['pid'])
-    for key in ['pid','process_identity','modules','objects','chain','static_proof_sha256','guarded_prologues','discovery_prologues','vtables']:
+    for key in ['profile_id','runtime_live_allowed','pid','process_identity','modules','objects','chain','static_proof_sha256','guarded_prologues','discovery_prologues','vtables']:
         if current[key]!=stored[key]:
             raise ValueError("Fresh session revalidation mismatch: "+key)
     return current

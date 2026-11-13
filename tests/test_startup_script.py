@@ -1,4 +1,5 @@
 """Exercise Windows startup registration and update drainage without touching real Startup."""
+import ast
 import json
 from pathlib import Path
 import shutil
@@ -28,6 +29,48 @@ class StartupScriptTests(unittest.TestCase):
         (folder / '.venv/Scripts/pythonw.exe').touch()
         shutil.copy2(ROOT / 'tools/manage.ps1', folder / 'tools/manage.ps1')
         return ". (Join-Path $PSScriptRoot 'tools/manage.ps1')\nfunction Get-AutoLootStartupPath { Join-Path $PSScriptRoot 'test-startup.lnk' }\n"
+
+    def qualification_fixture(self, folder, failure=None):
+        # Réutiliser les vrais liens profil/sources ; simuler seulement la
+        # frontière des essais natifs dans ces scénarios de déploiement isolés.
+        source=(ROOT/'tools/autoloot_runtime.py').read_text(encoding='utf-8')
+        functions={node.name: ast.get_source_segment(source,node) for node in ast.parse(source).body
+                   if isinstance(node,ast.FunctionDef)}
+        for name in ('runtime_profile.py','autoloot_runtime.c','autoloot_runtime_fixture.js'):
+            shutil.copy2(ROOT/'tools'/name,folder/'tools'/name)
+        fixture='''import hashlib,json,sys
+from pathlib import Path
+from runtime_profile import PROFILE_171,compiled_core,profile_digest,profile_by_name
+ROOT=Path(__file__).resolve().parents[1]
+'''+ '\n\n'.join(functions[name] for name in ('core_source','qualification_binding','qualification_path'))+'''
+if __name__=='__main__':
+    if len(sys.argv)!=4 or sys.argv[1:3]!=['--dummy','--profile']:
+        raise ValueError('Explicit dummy profile required')
+    profile=profile_by_name(sys.argv[3])
+    evidence=ROOT/'evidence'
+    evidence.mkdir(exist_ok=True)
+    calls=evidence/'qualification-calls.json'
+    records=json.loads(calls.read_text()) if calls.exists() else []
+    records.append(profile['id'])
+    calls.write_text(json.dumps(records))
+    failure=FAILURE
+    if profile['id']=='1.8.1.0na' and failure=='exit':
+        raise SystemExit(3)
+    proof={'passed':True,'mode':'owned_runtime_fixture_no_game_access','live_executed':False,'errors':[],
+           **qualification_binding(profile),'cases':[{'name':str(i),'passed':True} for i in range(158)],
+           'host_tests':{'passed':True}}
+    if profile['id']=='1.8.1.0na':
+        if failure=='missing':
+            raise SystemExit(0)
+        if failure in ('profile_id','profile_sha256','core_sha256','fixture_sha256'):
+            proof[failure]='stale'
+        if failure=='host':
+            proof['host_tests']['passed']=False
+        if failure=='case':
+            proof['cases'][0]['passed']=False
+    qualification_path(profile).write_text(json.dumps(proof),encoding='utf-8')
+'''.replace('FAILURE',repr(failure))
+        (folder/'tools/autoloot_runtime.py').write_text(fixture,encoding='utf-8')
 
     def test_real_shortcut_roundtrip_and_foreign_shortcut_refused(self):
         with tempfile.TemporaryDirectory(prefix='autoloot-startup-') as temp:
@@ -147,7 +190,7 @@ if ($state.keep_paused) { throw 'Retry ignored an explicit resume' }
         with tempfile.TemporaryDirectory(prefix='autoloot-configure-late-pause-') as temp:
             folder = Path(temp)
             script = self.sandbox(folder)
-            (folder / 'tools/autoloot_runtime.py').write_text('raise SystemExit(0)\n')
+            self.qualification_fixture(folder)
             base_python = str(getattr(sys, '_base_executable', sys.executable)).replace("'", "''")
             script += f"function Get-AutoLootPython {{ '{base_python}' }}\n" + '''
 function Resume-AutoLoot([string]$InstallationRoot, [switch]$KeepPaused) {
@@ -165,7 +208,7 @@ Configure-AutoLoot $PSScriptRoot (Join-Path $PSScriptRoot 'state.json')
             script = self.sandbox(folder)
             venv.EnvBuilder(with_pip=True).create(folder / '.venv')
             (folder / 'requirements.txt').write_text('')
-            (folder / 'tools/autoloot_runtime.py').write_text('raise SystemExit(0)\n')
+            self.qualification_fixture(folder)
             script += '''
 $env:PIP_NO_INDEX = '1'
 $env:PIP_CONFIG_FILE = 'NUL'
@@ -183,7 +226,7 @@ if ((Get-AutoLootPreviousRoot) -ne $PSScriptRoot) { throw 'Source startup regist
             with self.subTest(migration=migration), tempfile.TemporaryDirectory(prefix='autoloot-configure-resume-') as temp:
                 folder = Path(temp)
                 script = self.sandbox(folder)
-                (folder / 'tools/autoloot_runtime.py').write_text('raise SystemExit(0)\n')
+                self.qualification_fixture(folder)
                 base_python = str(getattr(sys, '_base_executable', sys.executable)).replace("'", "''")
                 script += '''
 $pausedRoot = if (MIGRATION) { Join-Path $PSScriptRoot 'previous' } else { $PSScriptRoot }
@@ -209,7 +252,7 @@ function Resume-AutoLoot([string]$InstallationRoot, [switch]$KeepPaused) {
         with tempfile.TemporaryDirectory(prefix='autoloot-no-autostart-') as temp:
             folder = Path(temp)
             script = self.sandbox(folder)
-            (folder / 'tools/autoloot_runtime.py').write_text('import sys\nassert sys.argv[1:] == ["--dummy"]\n')
+            self.qualification_fixture(folder)
             base_python = str(getattr(sys, '_base_executable', sys.executable)).replace("'", "''")
             script += f"function Get-AutoLootPython {{ '{base_python}' }}\n" + '''
 function Get-AutoLootStartupPath { throw 'Real Startup must not be accessed' }
@@ -221,6 +264,33 @@ if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'evidence\\autoloot5m\
 Uninstall-AutoLoot $PSScriptRoot -SkipAutoStart
 '''
             self.run_script(folder, script)
+            self.assertEqual(json.loads((folder/'evidence/qualification-calls.json').read_text()),
+                             ['1.7.1.0na','1.8.1.0na'])
+
+    def test_second_profile_failure_missing_or_stale_proof_never_activates(self):
+        for failure in ('exit','missing','profile_id','core_sha256','fixture_sha256','host','case'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory(prefix='autoloot-second-profile-refusal-') as temp:
+                folder=Path(temp)
+                script=self.sandbox(folder)
+                self.qualification_fixture(folder,failure)
+                base_python=str(getattr(sys,'_base_executable',sys.executable)).replace("'","''")
+                script+=f"function Get-AutoLootPython {{ '{base_python}' }}\n"+'''
+function Register-AutoLootStartup { Set-Content -LiteralPath (Join-Path $PSScriptRoot 'registered') -Value 'bad' }
+function Resume-AutoLoot { Set-Content -LiteralPath (Join-Path $PSScriptRoot 'started') -Value 'bad' }
+Prepare-AutoLoot $PSScriptRoot (Join-Path $PSScriptRoot 'state.json')
+$refused=$false
+try { Configure-AutoLoot $PSScriptRoot (Join-Path $PSScriptRoot 'state.json') } catch {
+    if ($_ -notlike '*Offline checks failed*') { throw }
+    $refused=$true
+}
+if (-not $refused) { throw 'Second profile refusal ignored' }
+if ((Test-Path -LiteralPath (Join-Path $PSScriptRoot 'registered')) -or
+    (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'started'))) { throw 'Refused bundle activated' }
+if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'evidence/autoloot5m/watch.pause'))) { throw 'Refused bundle resumed' }
+'''
+                self.run_script(folder,script)
+                self.assertEqual(json.loads((folder/'evidence/qualification-calls.json').read_text()),
+                                 ['1.7.1.0na','1.8.1.0na'])
 
     def test_qualification_failure_never_registers_or_starts(self):
         with tempfile.TemporaryDirectory(prefix='autoloot-qualification-refusal-') as temp:

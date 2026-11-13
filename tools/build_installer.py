@@ -17,16 +17,19 @@ import urllib.request
 import uuid
 import zipfile
 
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from runtime_profile import PROFILE_171, PROFILE_181, profile_digest, compiled_core
+
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '1.2.0'
-NATIVE_CASE_COUNT = 144
+VERSION = '1.3.0'
+NATIVE_CASE_COUNT = 158
 PYTHON_VERSION = '3.14.7'
 PYTHON_EMBED_URL = 'https://www.python.org/ftp/python/3.14.7/python-3.14.7-embed-amd64.zip'
 PYTHON_EMBED_SHA256 = 'd297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15'
 PACKAGES = {'frida': '17.24.0', 'pefile': '2024.8.26', 'capstone': '5.0.9'}
 TOOLS = ('autoloot_runtime.py', 'autoloot_runtime.js', 'autoloot_runtime.c',
          'autoloot_runtime_fixture.py', 'autoloot_runtime_fixture.js', 'autoloot_watch.py',
-         'runtime_paths.py', 'runtime_control.py', 'game_paths.py', 'discover_session.py',
+         'runtime_paths.py', 'runtime_profile.py', 'discovery_181.py', 'runtime_control.py', 'game_paths.py', 'discover_session.py',
          'inspect_native.py', 'observe_runtime.py', 'manage.ps1', 'control.py', 'DIAGNOSTIC.md')
 FILES = ('README.md', 'requirements.txt', 'autoloot.local.example.json')
 
@@ -155,7 +158,7 @@ PROBE = r'''
 import json,sys
 from pathlib import Path
 try:
- import unittest.mock,frida,capstone,pefile,ordlookup,runtime_paths
+ import unittest.mock,frida,capstone,pefile,ordlookup,runtime_paths,runtime_profile
  from importlib.metadata import version
  root=Path(sys.executable).resolve().parent
  bundle=root.parent
@@ -163,6 +166,7 @@ try:
  assert all(Path(entry).resolve().is_relative_to(bundle) for entry in sys.path),sys.path
  assert not any(".venv" in Path(entry).parts for entry in sys.path),sys.path
  assert Path(runtime_paths.__file__).resolve().is_relative_to(bundle),runtime_paths.__file__
+ assert Path(runtime_profile.__file__).resolve().is_relative_to(bundle),runtime_profile.__file__
  assert sys.version_info[:3]==(3,14,7),sys.version
  assert frida.__version__=='17.24.0'
  assert version('capstone')=='5.0.9',version('capstone')
@@ -198,19 +202,30 @@ def qualify(stage, downloads, logs, report):
         raise RuntimeError('Embedded import check failed; see '+str(log))
     report['embedded_imports']=result
     print('Qualifying embedded runtime with an owned dummy child only...', flush=True)
-    log = logs / 'embedded-dummy.log'
-    if run([python, '-B', stage / 'tools/autoloot_runtime.py', '--dummy'], log, timeout=300, env=env, cwd=logs):
-        raise RuntimeError('Embedded native qualification failed; see ' + str(log))
-    proof_file = stage / 'evidence/autoloot-runtime-dummy.json'
-    proof = json.loads(proof_file.read_text(encoding='utf-8'))
-    if proof.get('passed') is not True or len(proof.get('cases', [])) != NATIVE_CASE_COUNT or not proof.get('host_tests', {}).get('passed') or \
-            proof.get('core_sha256') != digest(stage / 'tools/autoloot_runtime.c') or \
-            proof.get('fixture_sha256') != digest(stage / 'tools/autoloot_runtime_fixture.js'):
-        raise ValueError('Embedded qualification evidence does not match the staged sources')
-    shutil.copy2(proof_file, logs / 'native-qualification.json')
-    report['native_qualification'] = {'passed': True, 'cases': len(proof['cases']),
-                                      'host_tests_passed': True, 'core_sha256': proof['core_sha256'],
-                                      'fixture_sha256': proof['fixture_sha256']}
+    report['native_qualifications'] = {}
+    for profile in (PROFILE_171, PROFILE_181):
+        profile_id = profile['id']
+        log = logs / ('embedded-dummy-' + profile_id + '.log')
+        if run([python, '-B', stage / 'tools/autoloot_runtime.py', '--dummy', '--profile', profile_id], log,
+               timeout=300, env=env, cwd=logs):
+            raise RuntimeError('Embedded native qualification failed for ' + profile_id + '; see ' + str(log))
+        suffix = '' if profile == PROFILE_171 else '-' + profile_id
+        proof_file = stage / 'evidence' / ('autoloot-runtime-dummy' + suffix + '.json')
+        proof = json.loads(proof_file.read_text(encoding='utf-8'))
+        cases = proof.get('cases')
+        if proof.get('passed') is not True or proof.get('mode') != 'owned_runtime_fixture_no_game_access' or \
+                proof.get('live_executed') is not False or proof.get('errors') != [] or \
+                not isinstance(cases, list) or len(cases) != NATIVE_CASE_COUNT or \
+                any(not isinstance(case, dict) or case.get('passed') is not True for case in cases) or \
+                proof.get('host_tests', {}).get('passed') is not True or \
+                proof.get('profile_id') != profile_id or proof.get('profile_sha256') != profile_digest(profile) or \
+                proof.get('core_sha256') != hashlib.sha256(compiled_core((stage / 'tools/autoloot_runtime.c').read_text(encoding='utf-8'), profile).encode('utf-8')).hexdigest() or \
+                proof.get('fixture_sha256') != digest(stage / 'tools/autoloot_runtime_fixture.js'):
+            raise ValueError('Embedded qualification evidence does not match the staged sources: ' + profile_id)
+        shutil.copy2(proof_file, logs / ('native-qualification-' + profile_id + '.json'))
+        report['native_qualifications'][profile_id] = {'passed': True, 'cases': len(cases),
+            'host_tests_passed': True, 'profile_id': profile_id, 'profile_sha256': proof['profile_sha256'],
+            'core_sha256': proof['core_sha256'], 'fixture_sha256': proof['fixture_sha256']}
 
 
 def clean_generated(stage):

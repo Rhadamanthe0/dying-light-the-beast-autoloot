@@ -24,6 +24,8 @@
 !/tools/observe_runtime.py
 !/tools/manage.ps1
 !/tools/runtime_paths.py
+!/tools/runtime_profile.py
+!/tools/discovery_181.py
 !/tools/control.py
 !/tools/build_installer.py
 !/installer/
@@ -41,6 +43,8 @@
 !/tests/test_watch.py
 !/tests/test_startup_script.py
 !/tests/test_runtime_paths.py
+!/tests/test_runtime_profile.py
+!/tests/test_discovery_181.py
 !/.github/
 /.github/*
 !/.github/workflows/

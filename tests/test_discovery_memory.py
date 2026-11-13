@@ -159,10 +159,12 @@ class DiscoveryMemoryTests(unittest.TestCase):
         self.api = MemoryAPI()
         self.base, self.game, self.level, self.client = 0x10000000, 0x300000, 0x310000, 0x320000
         self.player, self.host, self.registry, self.data, self.trigger = 0x500000, 0x600000, 0x610000, 0x620000, 0x630000
-        self.proof = {'images': {'game': {'path': str(ROOT/'fake'/D.GAME_DLL)}},
+        self.proof = {'profile_id':'1.7.1.0na','runtime_live_allowed':True,
+                      'images': {'game': {'path': str(ROOT/'fake'/D.GAME_DLL),'sha256':D.HASHES['game']},
+                                 'engine':{'sha256':D.HASHES['engine']}},
                       'guarded_prologues': [{'name': 'guard', 'rva': 0x1000, 'hex': 'c3'}],
                       'discovery_prologues': [], 'vtables': {}, 'game_global_rva': '0x2000',
-                      'chain': {}, 'limits': []}
+                      'chain': {'trigger_owner_getter_rva':'0x17f800'}, 'limits': []}
         self.api.put(self.base+0x1000, b'\xc3')
         for i, (key, rva) in enumerate(D.VTABLE_RVAS.items()):
             table = {'class': key, 'rva': rva, 'col_rva': 0x3000+i*0x100,

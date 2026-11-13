@@ -1,12 +1,13 @@
  'use strict';
-const pid=__OWNED_PID__,coreSource=__CORE_SOURCE__;
+const pid=__OWNED_PID__,coreSource=__CORE_SOURCE__,profile=__FIXTURE_PROFILE__;
+const rvas=profile.rvas;
 if(Process.id!==pid||Frida.version!=='17.24.0'||Script.runtime!=='QJS'||Process.platform!=='windows'||Process.arch!=='x64')throw new Error('Owned fixture required');
 const kernel=Process.getModuleByName('kernel32.dll'),address=n=>kernel.getExportByName(n);
-const cfg=Memory.alloc(256),bindingCfg=Memory.alloc(256),runtimeConfig=Memory.alloc(128),state=Memory.alloc(32768),fixtureStats=Memory.alloc(128),controls=Memory.alloc(32),tickAddress=Memory.alloc(8);
+const cfg=Memory.alloc(256),bindingCfg=Memory.alloc(256),runtimeConfig=Memory.alloc(128),state=Memory.alloc(32768),fixtureStats=Memory.alloc(128),controls=Memory.alloc(32),tickAddress=Memory.alloc(8),proxyTypes=Memory.alloc(16);
 const diag=Memory.alloc(32),diagCounts=Memory.alloc(64),diagQpc=Memory.alloc(8);
 const fixtureSource=`
 #include <glib.h>
-extern guint64 cfg[32],runtime_config[16],stats[16],diag_counts[8],diag_qpc;extern volatile gint controls[8],diag[8];extern gpointer tick_address;
+extern guint64 cfg[32],runtime_config[16],stats[16],diag_counts[8],diag_qpc;extern volatile gint controls[8],diag[8];extern gpointer tick_address;extern guint64 proxy_types[2];
 extern void Sleep(guint);extern guint GetCurrentThreadId(void);extern guint64 GetTickCount64(void);extern gboolean QueryPerformanceCounter(gint64*);
 extern gboolean ReadProcessMemory(gpointer,gconstpointer,gpointer,gsize,gsize*);
 extern gpointer GetProcessHeap(void);extern gpointer HeapAlloc(gpointer,guint,gsize);extern gboolean HeapFree(gpointer,guint,gpointer);
@@ -68,6 +69,8 @@ guint8 eligibility(gpointer component,gint action,gpointer ctx){stats[6]++;
  if(action!=1||(guint64)ctx!=cfg[14]||((guint64)component!=cfg[9]&&(guint64)component!=cfg[28]))stats[7]++;
  if(load(controls+4)==26){guint64 body=component==(gpointer)cfg[9]?cfg[7]:cfg[26];
   guint64 desc=*(guint64*)(body+(load(controls+5)==3?0x630:0x3c0));*(guint8*)(desc+0x3c2)|=0x40;}
+ if(load(controls+4)==32){guint64 body=component==(gpointer)cfg[9]?cfg[7]:cfg[26],proxy=*(guint64*)(body+0x38);
+  *(guint64*)proxy=*(guint64*)proxy==proxy_types[0]?proxy_types[1]:proxy_types[0];}
  block(4);return load(controls+4)==2?0:0x81;
 }
 guint8 dispatch(gpointer player,guint64 handle,gpointer ctx){guint64 component,human,body;stats[8]++;
@@ -127,7 +130,7 @@ guint worker(gpointer a){Worker*w=a;guint i;w->thread_id=GetCurrentThreadId();
    if(((Tick)tick_address)(w->player,i,0)!=(((guint64)w->player^i)+0x1234))w->failures++;Sleep(load(controls+7)?1:16);}
  w->done=1;return 0;}
 `;
-const fixture=new CModule(fixtureSource,{cfg,runtime_config:runtimeConfig,stats:fixtureStats,controls,tick_address:tickAddress,diag,diag_counts:diagCounts,diag_qpc:diagQpc,
+const fixture=new CModule(fixtureSource,{cfg,runtime_config:runtimeConfig,stats:fixtureStats,controls,tick_address:tickAddress,diag,diag_counts:diagCounts,diag_qpc:diagQpc,proxy_types:proxyTypes,
  Sleep:address('Sleep'),GetCurrentThreadId:address('GetCurrentThreadId'),GetTickCount64:address('GetTickCount64'),
  QueryPerformanceCounter:address('QueryPerformanceCounter'),ReadProcessMemory:address('ReadProcessMemory'),GetProcessHeap:address('GetProcessHeap'),HeapAlloc:address('HeapAlloc'),HeapFree:address('HeapFree')});
 const cm=new CModule(coreSource,{runtime_config:runtimeConfig,cfg:bindingCfg,state,ReadProcessMemory:fixture.read_memory,
@@ -139,7 +142,7 @@ const size=new NativeFunction(cm.state_size,'uint',[])(),snapSize=new NativeFunc
 if(size>32768||snapSize!==14080)throw new Error('Unexpected runtime layout');
 const snapBuffer=Memory.alloc(snapSize),createThread=new NativeFunction(address('CreateThread'),'pointer',['pointer','size_t','pointer','pointer','uint','pointer']);
 const wait=new NativeFunction(address('WaitForSingleObject'),'uint',['pointer','uint']),close=new NativeFunction(address('CloseHandle'),'bool',['pointer']);
-const image=Memory.alloc(0x3707000),player=Memory.alloc(0x4000),player2=Memory.alloc(0x4000),game=Memory.alloc(0x200),level=Memory.alloc(0xf00),client=Memory.alloc(0x100);
+const image=Memory.alloc(profile.fixture_image_size),player=Memory.alloc(0x4000),player2=Memory.alloc(0x4000),game=Memory.alloc(0x200),level=Memory.alloc(0xf00),client=Memory.alloc(0x100);
 const pool=Memory.alloc(16),storage=Memory.alloc(0x8000),gameSlot=Memory.alloc(8),entityLevel=Memory.alloc(0x80),levelHost=Memory.alloc(0x700),ilevel=Memory.alloc(8),typeObj=Memory.alloc(8),rtti=Memory.alloc(8);
 const vectorBlock=Memory.alloc(64),vector=vectorBlock.add(31).and(ptr('0xfffffffffffffff0')),ctxBlock=Memory.alloc(96),ctx=ctxBlock.add(31).and(ptr('0xfffffffffffffff0'));
 const qpfOut=Memory.alloc(8);if(!new NativeFunction(address('QueryPerformanceFrequency'),'bool',['pointer'])(qpfOut))throw new Error('QPF unavailable');
@@ -155,15 +158,17 @@ for(let i=0;i<2;i++){const s={body:Memory.alloc(0x970),human:Memory.alloc(0x2870
 for(let i=0;i<2;i++)groundMeta.push({proxy:storage.add(i*0x4000+0x780),handle:sources[i].handle.add(0x60),node:Memory.alloc(24),table:Memory.alloc(24),records:Memory.alloc(72)});
 const diagnosticBodies=Array.from({length:16},()=>Memory.alloc(64)),diagnosticTable=Memory.alloc(128);
 function initialize(mode){
+ q(proxyTypes,image.add(rvas.GAME_PROXY_PRIMARY));
+ q(proxyTypes.add(8),image.add(rvas.GAME_MODEL_PROXY_PRIMARY===rvas.GAME_PROXY_PRIMARY?profile.fixture_image_size-0x1000:rvas.GAME_MODEL_PROXY_PRIMARY));
  diag.writeByteArray(new Uint8Array(32));diagCounts.writeByteArray(new Uint8Array(64));diagQpc.writeU64(0);
  if(mode==='prequery_concurrency')diag.add(24).writeS32(1);
  state.writeByteArray(new Uint8Array(32768));bindingCfg.writeByteArray(new Uint8Array(256));cfg.writeByteArray(new Uint8Array(256));runtimeConfig.writeByteArray(new Uint8Array(128));fixtureStats.writeByteArray(new Uint8Array(128));controls.writeByteArray(new Uint8Array(32));controls.add(12).writeS32(1);
- q(gameSlot,game);q(game,image.add(0x259fe08));q(game.add(0x138),level);q(level.add(0xec8),client);q(client.add(0x88),client);q(client.add(0x90),player);
- for(const p of [player,player2]){q(p,image.add(0x259c450));q(p.add(0x20),image.add(0x259d100));q(p.add(0x40),entityLevel);}
- q(entityLevel.add(0x48),levelHost);q(levelHost.add(0x6d8),ilevel);q(image.add(0x260ebf8),typeObj);q(typeObj,rtti);q(image.add(0x37069b0),pool);q(pool,storage);n(pool.add(8),0x8000);
- image.add(0x2a6fda0+0x2e8).writePointer(image.add(0x147e190));image.add(0x2a6fda0+0x2f0).writePointer(image.add(0x149dd40));image.add(0x2a6fda0+0x308).writePointer(image.add(0x1492690));
+ q(gameSlot,game);q(game,image.add(rvas.GAME_PRIMARY));q(game.add(0x138),level);q(level.add(0xec8),client);q(client.add(0x88),client);q(client.add(0x90),player);
+ for(const p of [player,player2]){q(p,image.add(rvas.GAME_PLAYER_PRIMARY));q(p.add(0x20),image.add(rvas.GAME_PLAYER_IGS));q(p.add(0x40),entityLevel);}
+ q(entityLevel.add(0x48),levelHost);q(levelHost.add(0x6d8),ilevel);q(image.add(rvas.ENGINE_CONTROL_TYPE_SLOT),typeObj);q(typeObj,rtti);q(image.add(rvas.GAME_CBS_POOL_SLOT),pool);q(pool,storage);n(pool.add(8),0x8000);
+ image.add(rvas.GAME_STRATEGY_PRIMARY+0x2e8).writePointer(image.add(rvas.GAME_STRATEGY_CALLBACK_2E8));image.add(rvas.GAME_STRATEGY_PRIMARY+0x2f0).writePointer(image.add(rvas.GAME_STRATEGY_CALLBACK_2F0));image.add(rvas.GAME_STRATEGY_PRIMARY+0x308).writePointer(image.add(rvas.GAME_STRATEGY_CALLBACK_308));
  for(let i=0;i<2;i++){const s=sources[i],page=storage.add(i*0x4000);
- q(s.body,image.add(0x29e84f0));q(s.human,image.add(0x2962618));q(s.component,image.add(0x293c8c0));q(s.strategy,image.add(0x2a6fda0));
+ q(s.body,image.add(rvas.GAME_BODY_PRIMARY));q(s.human,image.add(rvas.GAME_HUMAN_PRIMARY));q(s.component,image.add(rvas.GAME_COMPONENT_PRIMARY));q(s.strategy,image.add(rvas.GAME_STRATEGY_PRIMARY));
  q(s.component.add(0x598),s.strategy);q(s.strategy.add(0x28),s.human);q(s.component.add(0x10),s.entity);q(s.human.add(0x10),s.entity);
  q(s.human.add(0x2550),s.human);q(s.human.add(0x2558),s.body);q(s.body.add(0x5e8),s.body);q(s.body.add(0x5f0),s.human.add(0x70));q(s.human.add(0x5e8),s.manager);
  n(s.handles,s.handle);n(s.entity.add(0x78),s.handles);s.entity.add(0x80).writeU32(1);n(s.component.add(8),s.handle);
@@ -173,10 +178,10 @@ function initialize(mode){
  }
  matrices.forEach(m=>m.flags.writeU8(4));matrices[2].matrix.add(12).writeFloat(1);matrices[3].matrix.add(12).writeFloat(1.5);
  ctx.sub(16).writeByteArray(new Uint8Array(16).fill(0xa5));ctx.writeByteArray(new Uint8Array(48));ctx.add(48).writeByteArray(new Uint8Array(16).fill(0x5a));vector.sub(16).writeByteArray(new Uint8Array(16).fill(0xa5));vector.writeByteArray(new Uint8Array(16));vector.add(16).writeByteArray(new Uint8Array(16).fill(0x5a));
- const s=sources[0],t=sources[1];[player,game,gameSlot,image,level,client,client,s.body,s.human,s.component,s.strategy,s.manager,image.add(0x37069b0),s.handle,ctx,0,pool,storage,s.entity,s.handles,s.handles,1,0,2,1,2000,t.body,t.handle,t.component,ilevel,typeObj,t.handles].forEach((v,i)=>n(cfg.add(i*8),v));
+ const s=sources[0],t=sources[1];[player,game,gameSlot,image,level,client,client,s.body,s.human,s.component,s.strategy,s.manager,image.add(rvas.GAME_CBS_POOL_SLOT),s.handle,ctx,0,pool,storage,s.entity,s.handles,s.handles,1,0,2,1,2000,t.body,t.handle,t.component,ilevel,typeObj,t.handles].forEach((v,i)=>n(cfg.add(i*8),v));
  [player,game,gameSlot,image,level,client,client,image,vector,ctx,frequency,0,0,1].forEach((v,i)=>n(runtimeConfig.add(i*8),v));
  if(mode==='far')matrices[2].matrix.add(12).writeFloat(2.01);if(mode==='near2')matrices[2].matrix.add(12).writeFloat(2);
- if(mode==='unknown_class')sources.forEach(a=>q(a.body,image.add(0x29ed590)));
+ if(mode==='unknown_class')sources.forEach(a=>q(a.body,image.add(profile.fixture_image_size-8)));
  if(mode==='dirty')matrices[2].flags.writeU8(6);if(mode==='wrong_handle')n(s.component.add(8),s.handle.add(1));
  if(mode==='forwarding')n(s.component.add(0x450),1);if(mode==='extra')q(s.human.add(0x2858),s.body);
  if(mode==='mode')s.body.add(0x508).writeU32(0);if(mode==='nested')q(s.body.add(0x570),s.body);
@@ -199,22 +204,25 @@ function initialize(mode){
 
  if(mode.startsWith('ground_')||mode.startsWith('container_')||mode.startsWith('dropped_')||mode.startsWith('bag_')||mode.startsWith('resource_')){
   controls.add(20).writeS32(1);n(runtimeConfig.add(11*8),1);n(runtimeConfig.add(12*8),1);n(runtimeConfig.add(13*8),0);
-  image.add(0x2d326f8+0x128).writePointer(image.add(0x24ec9b6));image.add(0x257b948).writePointer(image.add(0xfba70));image.add(0x27ecee0+8).writePointer(image.add(0x80cb40));
+  image.add(rvas.GAME_PROXY_PRIMARY+0x128).writePointer(image.add(rvas.GAME_PROXY_TARGET_THUNK));image.add(rvas.GAME_PROXY_TARGET_IMPORT).writePointer(image.add(rvas.ENGINE_PROXY_TARGET));image.add(rvas.GAME_RECEIVER_TABLE+8).writePointer(image.add(rvas.GAME_GROUND_MESSAGE_WRAPPER));
+  image.add(rvas.GAME_MODEL_PROXY_PRIMARY+0x128).writePointer(image.add(rvas.GAME_PROXY_TARGET_THUNK));
   for(let i=0;i<2;i++){const a=sources[i],m=groundMeta[i],pg=storage.add(i*0x4000);
-   q(a.body,image.add(0x29ec228));q(a.body.add(0x10),image.add(0x29ec8f0));q(a.body.add(0x20),image.add(0x29ecbc8));q(a.body.add(0x38),m.proxy);
-   q(m.proxy,image.add(0x2d326f8));n(m.proxy.add(8),m.handle);q(m.proxy.add(0x10),a.entity);q(m.proxy.add(0x48),a.body.add(0x20));
+   q(a.body,image.add(rvas.GAME_ITEM_PRIMARY));q(a.body.add(0x10),image.add(rvas.GAME_ITEM_CONTROL));q(a.body.add(0x20),image.add(rvas.GAME_ITEM_IGS));q(a.body.add(0x38),m.proxy);
+   q(m.proxy,image.add(rvas.GAME_PROXY_PRIMARY));n(m.proxy.add(8),m.handle);q(m.proxy.add(0x10),a.entity);q(m.proxy.add(0x48),a.body.add(0x20));
    pg.add(0x2e).writeU16(2000);n(pg.add(0x110),1<<16);
    n(a.handles,a.handle);n(a.handles.add(8),m.handle);a.entity.add(0x80).writeU32(2);
-   q(a.component.add(0x598),NULL);q(a.component.add(0x70),image.add(0x27ecf30));q(a.component.add(0x78),m.node);
+   q(a.component.add(0x598),NULL);q(a.component.add(0x70),image.add(rvas.GAME_SENDER_TABLE));q(a.component.add(0x78),m.node);
    q(m.node,NULL);n(m.node.add(8),m.handle);q(m.node.add(0x10),a.body.add(0x270));
-   q(a.body.add(0x270),image.add(0x27ecee0));q(a.body.add(0x278),m.table);q(a.body.add(0x280),a.body.add(0x268));a.body.add(0x2a0).writeU8(0);a.body.add(0x4f0).writeU8(0);
+   q(a.body.add(0x270),image.add(rvas.GAME_RECEIVER_TABLE));q(a.body.add(0x278),m.table);q(a.body.add(0x280),a.body.add(0x268));a.body.add(0x2a0).writeU8(0);a.body.add(0x4f0).writeU8(0);
    n(m.table.add(8),m.records);m.table.add(0x10).writeU32(3);
-   [['0x53139e0185c9a12f',0x16e8c20],['0xcbbfaec882b2a3ea',0x16e9040],['0x5f2b7eb72fee8475',0x16e8cd0]].forEach(([guid,rva],j)=>{n(m.records.add(j*24),uint64(guid));q(m.records.add(j*24+8),image.add(rva));m.records.add(j*24+16).writeS32(0x20);});
+   [['0x53139e0185c9a12f',rvas.GAME_RECEIVER_CALLBACK_5313],['0xcbbfaec882b2a3ea',rvas.GAME_RECEIVER_CALLBACK_CBBF],['0x5f2b7eb72fee8475',rvas.GAME_RECEIVER_CALLBACK_5F2B]].forEach(([guid,rva],j)=>{n(m.records.add(j*24),uint64(guid));q(m.records.add(j*24+8),image.add(rva));m.records.add(j*24+16).writeS32(0x20);});
   }
   if(mode.startsWith('dropped_')){
    controls.add(20).writeS32(3);n(runtimeConfig.add(15*8),1);n(runtimeConfig.add(11*8),0);
-   q(image.add(0x296ed88+0x620),image.add(0xd6c570));q(image.add(0x296ed88+0x628),image.add(0xdee670));
-   sources.forEach(a=>{q(a.body,image.add(0x296ed88));q(a.body.add(0x10),image.add(0x296f460));q(a.body.add(0x20),image.add(0x296f738));q(a.body.add(0x628),image.add(0x289aaf0));});
+   q(image.add(rvas.GAME_DROPPED_PRIMARY+0x620),image.add(rvas.GAME_DROPPED_CAN_USE));q(image.add(rvas.GAME_DROPPED_PRIMARY+0x628),image.add(rvas.GAME_DROPPED_TAKE));
+   sources.forEach(a=>{q(a.body,image.add(rvas.GAME_DROPPED_PRIMARY));q(a.body.add(0x10),image.add(rvas.GAME_DROPPED_CONTROL));q(a.body.add(0x20),image.add(rvas.GAME_DROPPED_IGS));q(a.body.add(0x628),image.add(rvas.GAME_INVENTORY_CONTEXT_TABLE));});
+   groundMeta.forEach(m=>q(m.proxy,image.add(rvas.GAME_MODEL_PROXY_PRIMARY)));
+   if(mode==='dropped_proxy_slot')q(image.add(rvas.GAME_MODEL_PROXY_PRIMARY+0x128),image.add(rvas.GAME_PROXY_TARGET_THUNK+1));
    if(mode==='dropped_swap')controls.add(12).writeS32(24);
    if(mode==='dropped_full')controls.add(16).writeS32(2);
    if(mode==='dropped_no_progress')controls.add(16).writeS32(3);
@@ -223,17 +231,19 @@ function initialize(mode){
    if(mode==='dropped_generation_changed')controls.add(16).writeS32(22);
    if(mode==='dropped_post_unreadable')controls.add(16).writeS32(23);
    if(mode==='dropped_disabled')n(runtimeConfig.add(15*8),0);
-   if(mode==='dropped_callback')groundMeta.forEach(m=>q(m.records.add(56),image.add(0x16e8cd1)));
+   if(mode==='dropped_callback')groundMeta.forEach(m=>q(m.records.add(56),image.add(rvas.GAME_RECEIVER_CALLBACK_5F2B+1)));
   }
+  if(mode==='dropped_wrong_proxy_type'||mode==='ground_wrong_proxy_type')groundMeta.forEach(m=>q(m.proxy,image.add(profile.fixture_image_size-0x1000)));
+
   for(const a of sources){
    const dropped=mode.startsWith('dropped_'),inlineOffset=dropped?0x628:0x3b8;
-   q(a.body.add(inlineOffset),image.add(0x289aaf0));q(a.body.add(inlineOffset+8),a.description);
-   q(a.description,image.add(0x2886458));a.description.add(0x3c2).writeU8(0);
-   q(image.add(0x2886458+0x12a8),image.add(0x174c40));
-   q(image.add(0x28a13a0+0x12a8),image.add(0xa305a0));
-   if(mode.endsWith('_opportunity')||mode.endsWith('_opportunity_changed')||mode.endsWith('_ordinary_throwable')||mode.endsWith('_unknown_getter')||mode.endsWith('_canuse_opportunity_changed'))q(a.description,image.add(0x28a13a0));
+   q(a.body.add(inlineOffset),image.add(rvas.GAME_INVENTORY_CONTEXT_TABLE));q(a.body.add(inlineOffset+8),a.description);
+   q(a.description,image.add(profile.fixture_image_size-0x2000));a.description.add(0x3c2).writeU8(0);
+   q(image.add(profile.fixture_image_size-0x2000+0x12a8),image.add(rvas.GAME_OPPORTUNITY_FALSE));
+   q(image.add(profile.fixture_image_size-0x1800+0x12a8),image.add(rvas.GAME_OPPORTUNITY_FLAG));
+   if(mode.endsWith('_opportunity')||mode.endsWith('_opportunity_changed')||mode.endsWith('_ordinary_throwable')||mode.endsWith('_unknown_getter')||mode.endsWith('_canuse_opportunity_changed'))q(a.description,image.add(profile.fixture_image_size-0x1800));
    if(mode.endsWith('_opportunity'))a.description.add(0x3c2).writeU8(0x40);
-   if(mode.endsWith('_unknown_getter'))q(image.add(0x28a13a0+0x12a8),image.add(0xa305a1));
+   if(mode.endsWith('_unknown_getter'))q(image.add(profile.fixture_image_size-0x1800+0x12a8),image.add(rvas.GAME_OPPORTUNITY_FLAG+1));
    if(mode.endsWith('_unreadable_desc'))q(a.body.add(inlineOffset+8),ptr('0x12345000'));
   }
   if(mode.endsWith('_opportunity_changed'))controls.add(16).writeS32(25);
@@ -241,7 +251,7 @@ function initialize(mode){
   if(mode==='ground_swap')controls.add(12).writeS32(24);
   if(mode==='ground_swap_during_dispatch')controls.add(16).writeS32(10);
   if(mode==='ground_forward')sources.forEach(a=>a.body.add(0x2a0).writeU8(1));
-  if(mode==='ground_callback')groundMeta.forEach(m=>m.records.add(2*24+8).writePointer(image.add(0x16e8cd1)));
+  if(mode==='ground_callback')groundMeta.forEach(m=>m.records.add(2*24+8).writePointer(image.add(rvas.GAME_RECEIVER_CALLBACK_5F2B+1)));
   if(mode==='ground_consumed')sources.forEach(a=>a.body.add(0x4f0).writeU8(1));
   if(mode==='ground_forward_448')sources.forEach(a=>n(a.component.add(0x448),0));
   if(mode==='ground_forward_458')sources.forEach(a=>n(a.component.add(0x458),1));
@@ -251,11 +261,13 @@ function initialize(mode){
   if(mode==='ground_no_progress'){n(runtimeConfig.add(12*8),0);controls.add(16).writeS32(3);}
   if(mode.startsWith('bag_')){
    controls.add(20).writeS32(4);n(runtimeConfig.add(11*8),0);n(runtimeConfig.add(14*8),1);
-   q(image.add(0x29e9950+0x20),image.add(0x1185870));
-   q(image.add(0x29e84f0+0x620),image.add(0x1121590));q(image.add(0x29e84f0+0x628),image.add(0x11936c0));
-   sources.forEach(a=>{q(a.body,image.add(0x29e84f0));q(a.body.add(0x10),image.add(0x29e8c38));q(a.body.add(0x20),image.add(0x29e8f10));q(a.body.add(0x3d8),image.add(0x29e9950));a.body.add(0x59e).writeU8(0x6f);a.body.add(0x508).writeU32(2);a.body.add(0x4d0).writeU32(3);q(a.body.add(0x5e8),NULL);q(a.body.add(0x5f0),NULL);});
+   q(image.add(rvas.GAME_BODY_LOOT+0x20),image.add(rvas.GAME_CONTAINER_TAKE_ALL));
+   q(image.add(rvas.GAME_BODY_PRIMARY+0x620),image.add(rvas.GAME_BAG_CAN_USE));q(image.add(rvas.GAME_BODY_PRIMARY+0x628),image.add(rvas.GAME_BAG_TAKE));
+   sources.forEach(a=>{q(a.body,image.add(rvas.GAME_BODY_PRIMARY));q(a.body.add(0x10),image.add(rvas.GAME_BODY_CONTROL));q(a.body.add(0x20),image.add(rvas.GAME_BODY_IGS));q(a.body.add(0x3d8),image.add(rvas.GAME_BODY_LOOT));a.body.add(0x59e).writeU8(0x6f);a.body.add(0x508).writeU32(2);a.body.add(0x4d0).writeU32(3);q(a.body.add(0x5e8),NULL);q(a.body.add(0x5f0),NULL);});
+   groundMeta.forEach(m=>q(m.proxy,image.add(rvas.GAME_MODEL_PROXY_PRIMARY)));
+   if(mode==='bag_wrong_proxy_type')groundMeta.forEach(m=>q(m.proxy,image.add(profile.fixture_image_size-0x1000)));
    if(mode==='bag_empty')sources.forEach(a=>a.body.add(0x4d0).writeU32(0));
-   if(mode==='bag_iloot')sources.forEach(a=>q(a.body.add(0x3d8),image.add(0x29e8448)));
+   if(mode==='bag_iloot')sources.forEach(a=>q(a.body.add(0x3d8),image.add(rvas.GAME_CONTAINER_LOOT)));
    if(mode==='bag_post_unreadable')controls.add(16).writeS32(27);
    if(mode==='bag_human_changed')controls.add(16).writeS32(28);
    if(mode==='bag_mode1')sources.forEach(a=>a.body.add(0x508).writeU32(1));
@@ -270,17 +282,17 @@ function initialize(mode){
    if(mode==='bag_nested')sources.forEach(a=>q(a.body.add(0x570),a.body));
    if(mode==='bag_no_progress')controls.add(16).writeS32(3);
    if(mode==='bag_corpse_no_rescue'){n(runtimeConfig.add(13*8),1);sources.forEach(a=>q(a.body.add(0x5f0),a.human.add(0x70)));}
-   if(mode==='bag_callback')groundMeta.forEach(m=>q(m.records.add(56),image.add(0x16e8cd1)));
+   if(mode==='bag_callback')groundMeta.forEach(m=>q(m.records.add(56),image.add(rvas.GAME_RECEIVER_CALLBACK_5F2B+1)));
   }
   if(mode.startsWith('container_')||mode.startsWith('resource_')){
    controls.add(20).writeS32(2);n(runtimeConfig.add(11*8),0);n(runtimeConfig.add(14*8),1);
-   image.add(0x29e8448+0x20).writePointer(image.add(0x1185870));
-   for(const a of sources){q(a.body,image.add(0x29e6ff8));q(a.body.add(0x10),image.add(0x29e7730));q(a.body.add(0x20),image.add(0x29e7a08));q(a.body.add(0x3d8),image.add(0x29e8448));a.body.add(0x59e).writeU8(0x2f);a.body.add(0x4c8).writeByteArray(new Uint8Array(16));a.body.add(0x4d0).writeU32(3);}
+   image.add(rvas.GAME_CONTAINER_LOOT+0x20).writePointer(image.add(rvas.GAME_CONTAINER_TAKE_ALL));
+   for(const a of sources){q(a.body,image.add(rvas.GAME_CONTAINER_PRIMARY));q(a.body.add(0x10),image.add(rvas.GAME_CONTAINER_CONTROL));q(a.body.add(0x20),image.add(rvas.GAME_CONTAINER_IGS));q(a.body.add(0x3d8),image.add(rvas.GAME_CONTAINER_LOOT));a.body.add(0x59e).writeU8(0x2f);a.body.add(0x4c8).writeByteArray(new Uint8Array(16));a.body.add(0x4d0).writeU32(3);}
    if(mode.startsWith('resource_')){
-    q(image.add(0x29e6ff8+0x620),image.add(0x1121810));q(image.add(0x29e6ff8+0x628),image.add(0x1194280));
+    q(image.add(rvas.GAME_CONTAINER_PRIMARY+0x620),image.add(rvas.GAME_CONTAINER_CAN_USE));q(image.add(rvas.GAME_CONTAINER_PRIMARY+0x628),image.add(rvas.GAME_CONTAINER_TAKE));
     sources.forEach(a=>{a.body.add(0x508).writeU32(2);a.body.add(0x4d0).writeU32(1);});
     if(mode==='resource_mode_unreadable')controls.add(16).writeS32(31);
-    if(mode==='resource_vfunc')q(image.add(0x29e6ff8+0x628),image.add(0x1194281));
+    if(mode==='resource_vfunc')q(image.add(rvas.GAME_CONTAINER_PRIMARY+0x628),image.add(rvas.GAME_CONTAINER_TAKE+1));
     if(mode==='resource_multiple')sources.forEach(a=>a.body.add(0x4d0).writeU32(3));
     if(mode==='resource_empty')sources.forEach(a=>a.body.add(0x4d0).writeU32(0));
     if(mode==='resource_count_limit')sources.forEach(a=>a.body.add(0x4d0).writeU32(512));
@@ -290,8 +302,8 @@ function initialize(mode){
     if(mode==='resource_wrong_state')sources.forEach(a=>a.body.add(0x388).writeU32(2));
     if(mode==='resource_nested')sources.forEach(a=>q(a.body.add(0x570),a.body));
     if(mode==='resource_flag')sources.forEach(a=>a.body.add(0x59e).writeU8(0x27));
-    if(mode==='resource_iloot')sources.forEach(a=>q(a.body.add(0x3d8),image.add(0x29e8440)));
-    if(mode==='resource_callback')groundMeta.forEach(m=>q(m.records.add(56),image.add(0x16e8cd1)));
+    if(mode==='resource_iloot')sources.forEach(a=>q(a.body.add(0x3d8),image.add(rvas.GAME_CONTAINER_LOOT-8)));
+    if(mode==='resource_callback')groundMeta.forEach(m=>q(m.records.add(56),image.add(rvas.GAME_RECEIVER_CALLBACK_5F2B+1)));
     if(mode==='resource_wrong_owner')sources.forEach((a,i)=>q(a.component.add(0x10),sources[1-i].entity));
     if(mode==='resource_strategy')sources.forEach(a=>q(a.component.add(0x598),a.strategy));
     if(mode==='resource_generation_changed')controls.add(16).writeS32(22);
@@ -309,13 +321,15 @@ function initialize(mode){
    if(mode==='container_mode')sources.forEach(a=>a.body.add(0x508).writeS32(-1));
    if(mode==='container_nested')sources.forEach(a=>q(a.body.add(0x570),a.body));
    if(mode==='container_forward')sources.forEach(a=>n(a.component.add(0x450),1));
-   if(mode==='container_iloot')sources.forEach(a=>q(a.body.add(0x3d8),image.add(0x29e8440)));
+   if(mode==='container_iloot')sources.forEach(a=>q(a.body.add(0x3d8),image.add(rvas.GAME_CONTAINER_LOOT-8)));
    if(mode==='container_blocked_dispatch')controls.writeS32(3);
    if(mode==='container_blocked_select')controls.writeS32(2);
    if(mode==='container_no_progress'){n(runtimeConfig.add(12*8),0);controls.add(16).writeS32(3);}
    if(mode==='container_disabled')n(runtimeConfig.add(14*8),0);
-   if(mode==='container_complex_layout')sources.forEach(a=>{q(a.body,image.add(0x29ed590));a.body.add(0x4d0).writeU32(0xffffffff);});
+   if(mode==='container_complex_layout')sources.forEach(a=>{q(a.body,image.add(profile.fixture_image_size-8));a.body.add(0x4d0).writeU32(0xffffffff);});
   }
+  if(mode.endsWith('_alternate_proxy'))groundMeta.forEach(m=>q(m.proxy,image.add(mode.startsWith('dropped_')||mode.startsWith('bag_')?rvas.GAME_PROXY_PRIMARY:rvas.GAME_MODEL_PROXY_PRIMARY)));
+  if(mode.endsWith('_proxy_changed'))controls.add(16).writeS32(32);
  }
  n(cfg.add(15*8),matrices[2].matrix);n(cfg.add(23*8),matrices[3].matrix);
  if(mode.endsWith('_near2')){matrices[2].matrix.add(12).writeFloat(2);matrices[3].matrix.add(12).writeFloat(2);}

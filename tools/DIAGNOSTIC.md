@@ -1,43 +1,65 @@
-# Plant and firearm diagnosis
+# Optional pickup diagnosis
 
-Plant harvesting uses the exact already-open Container mode-2 route observed for lavender and chamomile, with the same guarded Take1/TakeAll interaction. Other plants sharing this mechanism are covered without item-name or rarity lists; inventory credit still requires in-game observation. The `--dropped-items` option adds the exact DroppedItem Take route. The watcher in this source tree enables it automatically; direct runtime commands must include the option. Updating these sources does not update an existing installation. This route covers the engine class, without selecting item types or rarity. Standard ground items still use the existing Take action, without rarity filtering. Inventory refusal and weapon swaps remain refused.
+These procedures are available for investigating a particular object. See the [version-specific in-game evidence and limits](../README.md#compatibility) before interpreting a result. Updating this source tree does not update an existing installation.
 
-Run the offline qualification first from the repository in PowerShell:
+## Offline qualification
 
-```powershell
-python tools/autoloot_runtime.py --dummy
-```
-
-For a later targeted in-game check, pause the installed AutoLoot using its Start menu shortcut and wait for it to stop. Load a save near **one** test object, with inventory space. Then, from this repository:
+From the repository in PowerShell, qualify each profile separately when its compiled core or fixture has changed:
 
 ```powershell
-python tools/autoloot_runtime.py --live --ground-items --containers --duration 60 --output evidence/plant-test.json
-python tools/inspect_native.py --report evidence/plant-test.json
+python tools/autoloot_runtime.py --dummy --profile 1.7.1.0na
+python tools/autoloot_runtime.py --dummy --profile 1.8.1.0na
 ```
 
-This collects normally through the existing guarded paths for 60 seconds; it does not enable unknown classes. The diagnostic adds no game reads or interactions. It retains sixteen distinct class/reason/stage samples and refreshes their last object address, collection cycle and cycle start time. Samples can be evicted when more classes/refusals are encountered. A reason of zero does not establish eligibility. The `unsupported_or_disabled_class` stage means no enabled route matched; `bind_refused` means the matching route failed preparation. Action refusals such as swap 24 remain in the ordinary `events` list. No collection or inventory credit is proven by a diagnostic sample.
+Each command exercises a disposable child process, without accessing the game. The proofs have distinct names in `evidence` and bind the exact profile, compiled C core and fixture. The installer runs both qualifications locally. Offline results do not prove inventory credit in game. `--profile` selects only the offline fixture; live commands detect the exact installed game/DLL fingerprints.
 
-Use a separate 60-second report for honey, each plant mechanism, an ordinary firearm and a legendary firearm, then a full-inventory firearm. Record the object label, whether the player was within 2 m, and inventory changes. The class resolver reads the installed game DLL only and prints its SHA256; compare it to the report preflight module hash. A null class name means RTTI resolution was unavailable, not that the object is safe to collect. The two reports and inventory observations provide the evidence needed to add an exact guarded route without enumerating item IDs.
+## Observe without collecting
 
-After the command finishes and reports normal shutdown, resume installed AutoLoot from its Start menu shortcut. Do not run both collectors together. No installation or game-file replacement is needed for this check. The offline tests and the native fixture do not establish actual harvesting in game.
-
-
-For a separately reviewed first DroppedItem trial, use the same pause/normal-shutdown sequence and limit dispatches:
-
-```powershell
-python tools/autoloot_runtime.py --live --dropped-items --duration 15 --max-dispatches 1 --output evidence/dropped-trial.json
-```
-
-The global cap applies to all enabled categories (corpses are also enabled by default). Verify the event body and `source_kind` identify the intended object. `dropped_source_changed` proves a successful read observed receiver generation or target invalidation after dispatch; it does not prove inventory credit. Read failures are unknown/no progress. Header and description identity, exact callback/type tables, inventory eligibility and Take1 remain required; swaps are refused.
-
-To inspect a nearby object without collecting anything, use `--diagnostic-only`. It overrides all collection switches, including corpses; only the bounded spatial query and class observations remain active. The installed watcher must still be paused.
+Pause the installed AutoLoot using its Start menu shortcut and wait for normal shutdown before running another runtime. During normal gameplay, this optional command observes nearby classes for 15 seconds with every collection route disabled:
 
 ```powershell
 python tools/autoloot_runtime.py --live --diagnostic-only --duration 15 --output evidence/observe-only.json
+python tools/inspect_native.py --report evidence/observe-only.json
 ```
 
-The single-item routes (`ContainerItem` and `DroppedItem`) refuse the engine's `OpportunityWeapon` property, including the observed pitchfork. Refusal reason `45` means this property was set; `44` means the description could not be validated or changed before dispatch. Inventory descriptions and the property are rechecked around action selection and eligibility. Ordinary throwables with this property clear remain eligible. The existing multiple-item corpse/container routes are unchanged; their payloads have not been individually qualified for opportunity-weapon exclusion.
+The report retains up to sixteen distinct class/reason/stage samples. Repeated samples refresh their object address, cycle and cycle start time; later classes can evict earlier samples. `unsupported_or_disabled_class` means no enabled route matched. `bind_refused` means preparation of the matching route failed. A reason of zero does not establish eligibility. A sample alone proves neither collection nor inventory credit.
 
-`--containers` also enables the exact standalone `BodyContainer` bag route: mode 2, positive content count, no associated Human, and the validated CBS receiver. It uses Take1 with the engine's inventory eligibility checks. The corpse route and ordinary mode-1 container route keep their original guards. Bag progress is reported separately as `loot_bag` events and `bag_completed_count0_state5`; disappearance alone is not inventory-credit proof.
+The class resolver reads the installed game DLL on disk and prints its SHA256. Compare that hash to the report's preflight module hash. A null class name means RTTI resolution was unavailable; it does not establish that an object is eligible.
 
-The mode-2 resource route is reported as `resource_container`, with separate `resource_dispatches` and `resource_completed_count0_state5` counters. It requires initially 1–512 contents, state 1, no nested container, exact owner/generation/callbacks and the existing radius. Mode 1 keeps the ordinary container route; unknown modes are refused (reason 47); failed reads retain their RPM refusal reason (100, 101 or 102). An opening action or weapon swap is never substituted for Take1.
+## Optional bounded pickup
+
+For a chosen nearby object, with inventory space, this command enables the existing routes for at most 15 seconds and one native dispatch:
+
+```powershell
+python tools/autoloot_runtime.py --live --ground-items --dropped-items --containers --duration 15 --max-dispatches 1 --output evidence/pickup-test.json
+python tools/inspect_native.py --report evidence/pickup-test.json
+```
+
+The cap is global and includes corpses, which are enabled by default. Match the event's object and `source_kind` to the intended object. Record the visible item and inventory change if inventory-credit evidence is needed. A time limit requests a cooperative stop; it cannot preempt an engine call already in progress.
+
+The optional 1.8.1 trial mode can restrict a pickup to one category (`corpses`, `ground`, `dropped` or `containers`):
+
+```powershell
+python tools/autoloot_runtime.py --live --trial-181 --trial-category dropped --duration 15 --max-dispatches 1 --output evidence/dropped-trial.json
+```
+
+This mode is limited to 30 seconds and an explicit dispatch cap from 1 to 64. Do not combine it with the legacy collection switches. It remains an optional diagnostic tool; normal 1.8.1 operation does not require `--trial-181`.
+
+After normal shutdown is confirmed, resume the installed AutoLoot from its Start menu shortcut. Never run the installed collector and a direct diagnostic runtime together.
+
+## Routes and refusal evidence
+
+- `--dropped-items` enables the exact DroppedItem Take route; the watcher enables it automatically. Standard ground items use their existing Take route. Both retain exact type, ownership, callback, generation, inventory-description and eligibility guards. The 1.8.1 CBS routes accept only the exact CoGameObjectProxy or CoModelObjectProxy table. The table selected at binding must remain unchanged.
+- Single-item `ContainerItem` and `DroppedItem` routes refuse the engine's `OpportunityWeapon` property. Reason `45` reports that property; `44` reports an unvalidated or changing description. The description and property are rechecked around action selection and eligibility. Weapon swaps remain refused, including action reason `24`.
+- `--containers` also enables standalone BodyContainer loot bags: mode 2, positive content count, no associated Human and the exact validated CBS receiver. They are reported as `loot_bag`, with `bag_completed_count0_state5` progress counters.
+- Ready-to-take plants use the guarded Container mode-2 resource mechanism, without plant-name or rarity lists. These events are `resource_container`, with separate dispatch, refusal and completion counters. They require 1 to 512 initial contents, state 1, no nested container and the exact owner, generation and callbacks. Ordinary containers retain mode 1. Unknown modes are refused with reason `47`; read/budget failures retain reasons `100`, `101` or `102`. No opening action substitutes for Take1.
+
+`dropped_source_changed` records a successfully read receiver-generation or target change after dispatch. Count-zero/state-five counters describe source progress. Neither source disappearance nor these counters alone establish inventory credit. Failed reads remain unknown or no progress. Multiple-item corpse/container payloads have not been individually qualified for opportunity-weapon exclusion.
+
+## Qualifying a new game build
+
+1. Record the executable version, Steam build ID and SHA-256 of both the game and engine DLLs. An unknown pair leaves the collector inactive.
+2. Start from the latest profile in `runtime_profile.py` and the checks in `discovery_181.py`. Resolve each address separately. Check function boundaries, class tables, slots and call sites. Reject missing or ambiguous matches.
+3. Verify the local player, object ownership, lifetime, callbacks and inventory eligibility on the new build. Observe a normal pickup to confirm the call path. Keep the checks for the previous builds.
+4. Register the candidate for offline tests. Run the native fixture for the candidate and the supported profiles. Include the new profile in installer qualification and CI.
+5. Verify a bounded pickup on the new build before enabling normal startup for its exact DLL pair. Record the distance, the source change and the observed inventory gain. Update the compatibility table with the categories actually observed.

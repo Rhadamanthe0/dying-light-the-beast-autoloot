@@ -72,22 +72,175 @@ class RuntimeHostTests(unittest.TestCase):
         root = self.args.output.parent
         (root / 'evidence').mkdir()
         (root / 'evidence/autoloot-runtime-dummy.json').write_text(
-            json.dumps({'passed': True, 'core_sha256': 'core'}))
-        module = {'sha256': 'game', 'name': 'game', 'path': 'game', 'base': '0x100000', 'size': 1}
-        current = {'ready': True, 'pid': 42, 'modules': {'game': module, 'engine': module},
+            json.dumps({'passed': True, 'core_sha256': 'core', 'profile_id':self.runtime.PROFILE_171['id'], 'profile_sha256':'profile', 'fixture_sha256':'fixture'}))
+        module = {'sha256': self.runtime.PROFILE_171['hashes']['game'], 'name': 'game', 'path': 'game', 'base': '0x100000', 'size': 1}
+        current = {'ready': True, 'pid': 42, 'modules': {'game': module, 'engine':{**module,'sha256':self.runtime.PROFILE_171['hashes']['engine']}},
                    'process_identity': {'creation_time_100ns': 1, 'executable': {}},
                    'objects': {'game': {'address': '0x200000'}, 'player': {'address': '0x300000'}},
                    'guarded_prologues': [], 'discovery_prologues': [],
                    'chain': {key: '0x400000' for key in ('game_global_slot', 'level', 'client', 'player_gate')}}
         self.discovery.HASHES = {'game': 'game', 'engine': 'game'}
+        profile=self.runtime.PROFILE_171
         self.discovery.discover = Mock(return_value=current)
         with patch.object(self.runtime, 'ROOT', root), patch.object(self.runtime, 'static_proof',
-                return_value={'core_sha256': 'core', 'function_guards': []}):
+                return_value={'core_sha256': 'core', 'function_guards': [], 'profile_id':self.runtime.PROFILE_171['id'], 'profile_sha256':'profile', 'fixture_sha256':'fixture','profile':profile}):
             for diagnostic in (False, True):
                 config, _ = self.actual_prepare(ground_items=True, containers=True,
                                                dropped_items=True, diagnostic_only=diagnostic)
                 self.assertEqual([config['values'][i] for i in (11, 13, 14, 15)],
                                  ['0' if diagnostic else '1'] * 4)
+
+    def test_stale_profile_or_fixture_qualification_refuses_before_discovery(self):
+        self.frida.__version__ = '17.24.0'
+        root = self.args.output.parent
+        (root / 'evidence').mkdir()
+        proof_path = root / 'evidence/autoloot-runtime-dummy.json'
+        binding = {'profile_id': 'reviewed', 'profile_sha256': 'profile',
+                   'core_sha256': 'compiled', 'fixture_sha256': 'fixture'}
+        self.discovery.discover = Mock(side_effect=forbidden)
+        with patch.object(self.runtime, 'ROOT', root), patch.object(self.runtime, 'static_proof', return_value={**binding,'profile':self.runtime.PROFILE_171}):
+            for key in binding:
+                for value in ('stale', None):
+                    proof = {'passed': True, **binding}
+                    if value is None:
+                        del proof[key]
+                    else:
+                        proof[key] = value
+                    proof_path.write_text(json.dumps(proof))
+                    with self.subTest(key=key, value=value), self.assertRaisesRegex(ValueError, 'owned-fixture qualification'):
+                        self.actual_prepare()
+        self.discovery.discover.assert_not_called()
+
+    def test_unreviewed_profile_refuses_before_player_discovery_or_attach(self):
+        self.frida.__version__ = '17.24.0'
+        profile = {**self.runtime.profile_by_name('1.8.1'),'hashes':self.runtime.PROFILE_171['hashes']}
+        self.discovery.discover = Mock(side_effect=forbidden)
+        with patch.object(self.runtime, 'static_proof', return_value={'profile': profile}):
+            with self.assertRaisesRegex(ValueError, 'Exact reviewed'):
+                self.actual_prepare()
+        self.discovery.discover.assert_not_called()
+        self.frida.attach.assert_not_called()
+
+    def test_native_qualification_paths_are_distinct_by_profile(self):
+        legacy = self.runtime.qualification_path(self.runtime.PROFILE_171)
+        current = self.runtime.qualification_path(self.runtime.profile_by_name('1.8.1'))
+        self.assertEqual(legacy.name, 'autoloot-runtime-dummy.json')
+        self.assertNotEqual(legacy, current)
+        self.assertIn('1.8.1.0na', current.name)
+
+    def prepare_trial(self, profile=None, trial_181=True, **options):
+        profile = self.runtime.profile_by_name('1.8.1') if profile is None else profile
+        self.frida.__version__ = '17.24.0'
+        binding = self.runtime.qualification_binding(profile)
+        proof_path = self.args.output.parent / 'trial-qualification.json'
+        proof_path.write_text(json.dumps({'passed': True, **binding}), encoding='utf-8')
+        game = {'sha256': profile['hashes']['game'], 'name': 'game', 'path': 'game', 'base': '0x100000', 'size': 1}
+        engine = {**game, 'sha256': profile['hashes']['engine']}
+        current = {'ready': True, 'pid': 42, 'modules': {'game': game, 'engine': engine},
+                   'process_identity': {'creation_time_100ns': 1, 'executable': {}},
+                   'objects': {'game': {'address': '0x200000'}, 'player': {'address': '0x300000'}},
+                   'guarded_prologues': [], 'discovery_prologues': [],
+                   'chain': {key: '0x400000' for key in ('game_global_slot', 'level', 'client', 'player_gate')}}
+        self.discovery.discover = Mock(return_value=current)
+        with patch.object(self.runtime, 'static_proof', return_value={**binding, 'profile': profile, 'function_guards': []}), \
+                patch.object(self.runtime, 'qualification_path', return_value=proof_path):
+            config, proof = self.actual_prepare(trial_181=trial_181, **options)
+        self.frida.attach.assert_not_called()
+        return config, proof
+
+    def test_both_normal_profiles_prepare_without_trial_contract(self):
+        for profile in (self.runtime.PROFILE_171,self.runtime.profile_by_name('1.8.1')):
+            config,_=self.prepare_trial(profile=profile,trial_181=False,ground_items=True,containers=True,dropped_items=True)
+            self.assertIsNone(config['trial_181'])
+            self.assertEqual(config['execution_mode'],'resident')
+            self.assertEqual(config['profile_id'],profile['id'])
+            self.assertEqual(config['profile_hashes'],profile['hashes'])
+
+    def test_trial_prepare_imposes_exact_category_or_diagnostic_configuration(self):
+        for diagnostic, category, cap, expected in [(True, 'corpses', 0, ['0', '0', '0', '0', '0']),
+                (False, 'corpses', 1, ['0', '1', '1', '0', '0']),
+                (False, 'ground', 1, ['1', '1', '0', '0', '0']),
+                (False, 'dropped', 1, ['0', '1', '0', '0', '1']),
+                (False, 'containers', 1, ['0', '1', '0', '1', '0'])]:
+            config, _ = self.prepare_trial(duration=15.0009, diagnostic_only=diagnostic, trial_category=category, max_dispatches=cap)
+            self.assertEqual(config['values'][11:16], expected)
+            self.assertEqual(config['duration_ms'], 15000)
+            self.assertEqual(config['trial_181']['duration_ms'], 15000)
+            self.assertEqual(config['trial_181']['category'], category)
+            self.assertEqual(config['execution_mode'], 'trial-181')
+        config, _ = self.prepare_trial(duration=15, max_dispatches=1)
+        self.assertEqual(config['trial_181']['category'], 'corpses')
+
+    def test_trial_prepare_preserves_explicit_dispatch_cap(self):
+        for category in ('corpses','ground','dropped','containers'):
+            for cap in (1,32,64):
+                config,_=self.prepare_trial(duration=15,trial_category=category,max_dispatches=cap)
+                self.assertEqual(config['trial_181']['dispatch_cap'],cap)
+                self.assertEqual(config['values'][12],str(cap))
+
+    def test_trial_forbidden_options_refuse_before_discovery_or_frida(self):
+        for diagnostic, category in [(False, value) for value in ('corpses', 'ground', 'dropped', 'containers')] + [(True, 'corpses')]:
+            for option in ('ground_items', 'ground_only', 'containers', 'containers_only', 'dropped_items'):
+                with self.subTest(diagnostic=diagnostic, category=category, option=option), self.assertRaisesRegex(ValueError, 'Trial181'):
+                    self.prepare_trial(duration=15, diagnostic_only=diagnostic, max_dispatches=0 if diagnostic else 1,
+                                       trial_category=category, **{option: True})
+                self.discovery.discover.assert_not_called()
+                self.frida.attach.assert_not_called()
+
+    def test_trial_duration_caps_and_legacy_profile_refuse_before_frida(self):
+        for category in ('corpses', 'ground', 'dropped', 'containers'):
+            for duration in (0, -1, 30.001, 0.0009, float('nan'), float('inf')):
+                with self.subTest(category=category, duration=duration), self.assertRaises(ValueError):
+                    self.prepare_trial(duration=duration, max_dispatches=1, trial_category=category)
+                self.discovery.discover.assert_not_called()
+            for cap in (0, 65, True, 1.5):
+                with self.subTest(category=category, cap=cap), self.assertRaises(ValueError):
+                    self.prepare_trial(duration=15, max_dispatches=cap, trial_category=category)
+                self.discovery.discover.assert_not_called()
+            for profile in (self.runtime.PROFILE_171,
+                            {**self.runtime.profile_by_name('1.8.1'), 'hashes': self.runtime.PROFILE_171['hashes']}):
+                with self.subTest(category=category, profile=profile['id']), self.assertRaises(ValueError):
+                    self.prepare_trial(profile=profile, duration=15, max_dispatches=1, trial_category=category)
+                self.discovery.discover.assert_not_called()
+        for cap in (1, 2):
+            with self.subTest(diagnostic=True, cap=cap), self.assertRaises(ValueError):
+                self.prepare_trial(duration=15, diagnostic_only=True, max_dispatches=cap)
+            self.discovery.discover.assert_not_called()
+        self.frida.attach.assert_not_called()
+
+    def test_trial_category_refuses_outside_trial_or_in_noncorpse_diagnosis(self):
+        self.discovery.discover = Mock(side_effect=forbidden)
+        for category in ('corpses', 'ground', 'dropped', 'containers'):
+            with self.subTest(category=category), self.assertRaises(ValueError):
+                self.actual_prepare(trial_category=category)
+            if category != 'corpses':
+                with self.assertRaises(ValueError):
+                    self.prepare_trial(duration=15, diagnostic_only=True, trial_category=category)
+            self.discovery.discover.assert_not_called()
+        for category in ('unknown', ''):
+            with self.subTest(category=category), self.assertRaises(ValueError):
+                self.prepare_trial(duration=15, trial_category=category, max_dispatches=1)
+            self.discovery.discover.assert_not_called()
+        self.frida.attach.assert_not_called()
+
+    def test_trial_cli_rejects_dummy_and_static_before_backend(self):
+        for mode in ('--dummy', '--static-only'):
+            with self.subTest(mode=mode), patch.object(sys, 'argv', ['autoloot_runtime.py', mode, '--trial-181']), \
+                    patch('sys.stderr', new=io.StringIO()), self.assertRaises(SystemExit) as error:
+                self.runtime.main()
+            self.assertEqual(error.exception.code, 2)
+        self.frida.attach.assert_not_called()
+
+    def test_trial_category_cli_requires_trial_marker_in_every_mode(self):
+        for mode in ('--dummy', '--static-only', '--preflight-only', '--live'):
+            for category in ('corpses', 'ground', 'dropped', 'containers'):
+                with self.subTest(mode=mode, category=category), \
+                        patch.object(sys, 'argv', ['autoloot_runtime.py', mode, '--trial-category', category]), \
+                        patch('sys.stderr', new=io.StringIO()) as errors, self.assertRaises(SystemExit) as error:
+                    self.runtime.main()
+                self.assertEqual(error.exception.code, 2)
+                self.assertIn('requires --trial-181', errors.getvalue())
+        self.frida.attach.assert_not_called()
 
     def run_host(self):
         with redirect_stdout(io.StringIO()):
@@ -179,7 +332,7 @@ class RuntimeHostTests(unittest.TestCase):
         self.discovery.process_ids.return_value = [42]
         self.runtime.prepare.side_effect = None
         self.runtime.prepare.return_value = ({'pid': 42}, {'query': {
-            'core_sha256': hashlib.sha256(SOURCE.with_suffix('.c').read_bytes()).hexdigest()}})
+            'profile': self.runtime.PROFILE_171, 'core_sha256': hashlib.sha256(self.runtime.core_source().encode('utf-8')).hexdigest()}})
         return script, trace
 
     def test_pause_during_creation_never_loads(self):
@@ -256,7 +409,7 @@ class RuntimeHostTests(unittest.TestCase):
         self.discovery.process_ids.return_value = [42]
         self.runtime.prepare.side_effect = None
         self.runtime.prepare.return_value = ({'pid': 42}, {'query': {
-            'core_sha256': hashlib.sha256(SOURCE.with_suffix('.c').read_bytes()).hexdigest()}})
+            'profile': self.runtime.PROFILE_171, 'core_sha256': hashlib.sha256(self.runtime.core_source().encode('utf-8')).hexdigest()}})
         return script, session, trace
 
     def test_poll_timeout_then_exit_during_stop_is_clean_and_skips_unload(self):
@@ -357,7 +510,7 @@ class RuntimeHostTests(unittest.TestCase):
         self.discovery.process_ids.return_value = [42]
         self.runtime.prepare.side_effect = None
         self.runtime.prepare.return_value = ({'pid': 42}, {'query': {
-            'core_sha256': hashlib.sha256(SOURCE.with_suffix('.c').read_bytes()).hexdigest()}})
+            'profile': self.runtime.PROFILE_171, 'core_sha256': hashlib.sha256(self.runtime.core_source().encode('utf-8')).hexdigest()}})
 
         code, status, report = self.run_host()
         self.assertEqual(code, 0)
